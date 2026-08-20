@@ -369,3 +369,21 @@ button.primary {
 .discard-inline .draft-inline-title { color: #ff9a7a; }
 .discard-inline .card { border-color: #6c3b43; }
 .discard-inline .discard-tag { background: #4a292e; color: #ff9a7a; }
+
+/* Part 2 keeps the same effects, played at double speed. */
+.part2 .board.shake { animation-duration: .15s; }
+.part2 .tile { transition-duration: .11s; }
+.part2 .tin.pop { animation-duration: .075s; }
+.part2 .tin.pop.boom { animation-duration: .14s; }
+.part2 .tin.pop.zap, .part2 .tin.pop.lava { animation-duration: .15s; }
+.part2 .tin.pop.line { animation-duration: .11s; }
+.part2 .tin.pop.sweep { animation-duration: .13s; }
+.part2 .tin.sp.pop { animation-duration: .125s; }
+.part2 .particle, .part2 .tin.chomping { animation-duration: .25s; }
+.part2 .tin.wiggle, .part2 .tin.fresh { animation-duration: .175s; }
+.part2 .tin.cflash { animation-duration: .3s; }
+.part2 .wavefx { animation-duration: .275s; }
+.part2 .fx { animation-duration: .4s; }
+.part2 .fx.combo { animation-duration: .5s; }
+.part2 .callout { animation-duration: .75s; }
+.part2 .panel, .part2 .draft-inline { animation-duration: .125s; }

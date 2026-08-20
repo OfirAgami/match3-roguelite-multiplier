@@ -32,6 +32,8 @@ const CONFIG = {
   CHECKPOINTS: [80, 250, 520, 900, 1500, 2500],
   CHECKPOINT_DIFFICULTY: [0.5, 0.6, 0.7, 0.8, 0.9, 1],
   ENDLESS_SCORE_GROWTH: 1.25,
+  PART_2_MOVE_COST: 2,
+  PART_2_ANIMATION_SPEED: 2,
   START_MOVES: 10,                 // opening move pool (base L1 budget)
   // Moves granted on crossing checkpoint i; the last entry is the victory-lap
   // grant past the final flag (halved in v3 — the endless economy self-extends:
@@ -494,8 +496,10 @@ class Game {
   }
 
   render() { this.onRender(); }
+  moveCost() { return this.run?.finalReached ? CONFIG.PART_2_MOVE_COST : 1; }
+  animationMs(ms) { return this.run?.finalReached ? Math.round(ms / CONFIG.PART_2_ANIMATION_SPEED) : ms; }
   // fast=true skips animation delays (scripted testing; hidden tabs throttle timers)
-  sleep(ms) { return this.fast ? Promise.resolve() : new Promise(res => setTimeout(res, ms)); }
+  sleep(ms) { return this.fast ? Promise.resolve() : new Promise(res => setTimeout(res, this.animationMs(ms))); }
   emptyMods() {
     return { boosts: {}, bombChance: 0, autoExplode: false, countdown: false,
              blastBonus: 0, specialScore: 0, expandRows: 0, expandCols: 0,
@@ -791,7 +795,7 @@ class Game {
       this.phase = 'checkpoint';
       return;
     }
-    if (this.movesLeft <= 0) {
+    if (this.movesLeft < this.moveCost()) {
       if (this.mods.lifesaver && !this.run.lifesaverUsed) {
         this.run.lifesaverUsed = true;
         this.movesLeft += CONFIG.LIFESAVER_BONUS_MOVES;
@@ -1699,7 +1703,8 @@ class Game {
       return;
     }
 
-    this.movesLeft--;
+    const moveCost = this.moveCost();
+    this.movesLeft -= moveCost;
     this.moveNum++;
     if (this.run.picks.some(p => p.id === 'snowball')) this.run.snowball++;
     this.lastSwapDir = { dr: b.r - a.r, dc: b.c - a.c };
@@ -1733,7 +1738,7 @@ class Game {
         this.callout(`3️⃣ Move ×${CONFIG.TRIPLE_TILE_MULT}!`);
       }
     }
-    if (this.refund) { this.movesLeft++; this.callout('🔄 Free move!'); }
+    if (this.refund) { this.movesLeft += moveCost; this.callout('🔄 Free move!'); }
     this.moveScores.push(this.score - preMoveScore);
     if (!this.refund) this.movesUsed++;
 
@@ -2003,10 +2008,10 @@ function Board({ G }) {
     const isVol = (t.volatile || 0) > (G.moveNum || 0);
     const tileStyle = { transform: `translate(${c * cell}px,${y}px)`, width: cell + 'px', height: cell + 'px' };
     // falling tiles: duration scales with drop distance, spring easing lands with a bounce
-    if (t.fallDist) tileStyle.transition = `transform ${G.fallDur(t.fallDist)}ms cubic-bezier(.22,.9,.28,1.4)`;
+    if (t.fallDist) tileStyle.transition = `transform ${G.animationMs(G.fallDur(t.fallDist))}ms cubic-bezier(.22,.9,.28,1.4)`;
     tiles.push(h`<div key=${t.id} className="tile" style=${tileStyle}>
       <div className=${'tin ' + (t.chomper ? 'chomper' : t.chest ? 'chest' : 'bg' + t.color) + (t.pop ? ' pop ' + (t.popKind || 'match') : '') + (isSel ? ' sel' : '') + (t.special ? ' sp' : '') + (t.fresh ? ' fresh' : '') + (isVol ? ' vol' : '') + (t.wiggle ? ' wiggle' : '') + (t.cflash ? ' cflash' : '') + (t.chomp ? ' chomping' : '')}
-        style=${t.pop && t.popDelay ? { animationDelay: t.popDelay + 'ms' } : null}>
+        style=${t.pop && t.popDelay ? { animationDelay: G.animationMs(t.popDelay) + 'ms' } : null}>
         ${t.chomper ? h`<span className="spe">😬</span>` : null}
         ${t.chest ? h`<span className="spe">🎁</span>` : null}
         ${t.special ? h`<span className="spe">${t.special === 'arrow' ? (t.dir === 'h' ? '↔️' : '↕️') : SPECIAL_EMOJI[t.special]}</span>` : null}
@@ -2040,7 +2045,7 @@ function Board({ G }) {
     if (f.kind === 'wave') {
       const D = f.size * cell;
       fx.push(h`<div key=${'f' + f.id} className="wavefx"
-        style=${{ left: (f.c + 0.5) * cell - D / 2 + 'px', top: (f.r + 0.5) * cell - D / 2 + 'px', width: D + 'px', height: D + 'px', animationDelay: (f.delay || 0) + 'ms' }}></div>`);
+        style=${{ left: (f.c + 0.5) * cell - D / 2 + 'px', top: (f.r + 0.5) * cell - D / 2 + 'px', width: D + 'px', height: D + 'px', animationDelay: G.animationMs(f.delay || 0) + 'ms' }}></div>`);
       continue;
     }
     fx.push(h`<div key=${'f' + f.id} className=${'fx ' + f.cls}
@@ -2109,7 +2114,7 @@ function LevelScreen({ G }) {
   const pct = endless ? frac * 100 : Math.min(100, ((idx + frac) / n) * 100);
   const cp = G.lastCheckpoint;
   const reward = G.run.pendingRewards[0];
-  return h`<div className="screen level-screen">
+  return h`<div className=${'screen level-screen' + (endless ? ' part2' : '')}>
     <div className="hud">
       <div className="hud-lv">${endless ? `🔥 Round ${G.run.endlessRound + 1}` : `🚩 ${G.run.checkpointIdx}/${cps.length}`}</div>
       <div className="hud-score">
@@ -2135,7 +2140,8 @@ function LevelScreen({ G }) {
         <h2>${cp.endlessCrossed
           ? `🔥 Endless Round ${cp.round} complete`
           : cp.finalFlag ? '🏁 Final checkpoint' : `🚩 Checkpoint ${cp.n}`}${cp.crossed > 1 ? ` (×${cp.crossed} in one move!)` : ''}</h2>
-        <p>+${cp.moves} moves${cp.finalFlag ? ' — Endless Round 1 begins' : ''}</p>
+        <p>+${cp.moves} moves${cp.finalFlag ? ' — Part 2 begins' : ''}</p>
+        ${cp.finalFlag ? h`<p><b>Animations are 2× faster. Every move costs ${CONFIG.PART_2_MOVE_COST} 👟.</b></p>` : null}
         <button className="primary" onClick=${() => G.continueRun()}>${reward === 'rotate' ? 'Choose a power-up to discard' : 'Draft a power-up'}</button>
       </div>
     </div>` : null}
