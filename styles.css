@@ -356,8 +356,6 @@ button.primary {
   background: #4a5164; border-radius: 2px; transition: background .3s, box-shadow .3s;
 }
 .cp-tick.done { background: #ffd54a; box-shadow: 0 0 6px #ffd54a99; }
-.nums .endless { color: #ff9d4d; font-weight: 800; letter-spacing: .5px; }
-
 /* ---- persistent-board fork: inline mid-run draft (board stays visible) ---- */
 .draft-inline { width: 100%; max-width: 520px; margin-top: 10px; animation: dslide .25s ease; }
 @keyframes dslide { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
@@ -368,3 +366,6 @@ button.primary {
 .draft-inline .card-name { font-size: 12.5px; }
 .draft-inline .card-desc { font-size: 11px; line-height: 1.35; }
 .draft-inline .card-tag { font-size: 9.5px; }
+.discard-inline .draft-inline-title { color: #ff9a7a; }
+.discard-inline .card { border-color: #6c3b43; }
+.discard-inline .discard-tag { background: #4a292e; color: #ff9a7a; }

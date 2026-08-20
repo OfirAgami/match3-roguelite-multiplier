@@ -1,9 +1,9 @@
 /* ============================================================================
    Match-3 Roguelite — PERSISTENT BOARD variant (fork of react-roguelite).
    One board for the whole run, one run-long progress bar with cumulative
-   score checkpoints. Crossing a checkpoint grants moves + a power-up draft;
-   after the final checkpoint the run goes endless (score chase) until moves
-   run out. No discrete levels, no board regeneration.
+   score checkpoints. Crossing a checkpoint grants moves + a power-up draft.
+   After the final checkpoint, growing endless rounds rotate one equipped
+   power-up at a time. No discrete levels, no board regeneration.
 
    All balance knobs live in CONFIG below. Power-ups are self-contained
    objects in POWERUPS that hook into game events (mods fold, onMatch,
@@ -15,7 +15,7 @@ const CONFIG = {
   // Stamped into every telemetry record so balance passes only compare runs
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
-  BALANCE_VERSION: 3, // v3: first telemetry pass — grants cut [10,12,13,14,15,8], checkpoints raised (segs 2-6 cleared at ~100%)
+  BALANCE_VERSION: 4, // v4: 50-100% opening ramp + growing endless power-up rotations
   VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
@@ -30,6 +30,8 @@ const CONFIG = {
   // level end in the base game), so grants now track observed per-segment need
   // (med. 9-16 moves used) and the middle checkpoints rose ~10%.
   CHECKPOINTS: [80, 250, 520, 900, 1500, 2500],
+  CHECKPOINT_DIFFICULTY: [0.5, 0.6, 0.7, 0.8, 0.9, 1],
+  ENDLESS_SCORE_GROWTH: 1.25,
   START_MOVES: 10,                 // opening move pool (base L1 budget)
   // Moves granted on crossing checkpoint i; the last entry is the victory-lap
   // grant past the final flag (halved in v3 — the endless economy self-extends:
@@ -478,7 +480,7 @@ const POWERUP_LIST = Object.values(POWERUPS);
 class Game {
   constructor(onRender) {
     this.onRender = onRender;
-    this.phase = 'menu';          // menu | draft | level | checkpoint | win | loss
+    this.phase = 'menu';          // menu | draft | discard | level | checkpoint | win | loss
     this.opts = { draftOptions: CONFIG.DRAFT_OPTIONS, colours: CONFIG.COLOURS };
     this.fx = []; this.callouts = []; this.fxId = 1; this.tileId = 1;
     this.busy = false; this.shake = false;
@@ -506,7 +508,8 @@ class Game {
   /* ------------------------------ Run flow ------------------------------
      newRun → draft 1 → startRun (the ONE board generation of the run) →
      play until score crosses a checkpoint → checkpoint overlay → draft →
-     resume the SAME board. After the final checkpoint: endless score chase.
+     resume the SAME board. The final checkpoint and every endless round use
+     discard → replacement instead of adding another power-up.
      The run ends only when moves hit 0 (win if the final flag was reached). */
   newRun(seed) {
     this.seed = (seed >>> 0) || 1;
@@ -515,7 +518,8 @@ class Game {
     // drives tier gating and keeps the base game's draft cadence.
     this.run = { level: 0, picks: [], draftHistory: [], snowball: 0, momentum: 0,
                  fillCount: 0, fillTriggers: 0, multiplier: 1, lifesaverUsed: false,
-                 checkpointIdx: 0, finalReached: false, pendingDrafts: 0, segmentsLogged: 0 };
+                 checkpointIdx: 0, finalReached: false, pendingRewards: [], segmentsLogged: 0,
+                 endlessRound: 0, endlessDelta: 0, endlessTarget: null };
     this.board = null;
     this.score = 0;
     this.busy = false;
@@ -523,10 +527,21 @@ class Game {
     this.startDraft();
   }
 
-  // Checkpoint values, colour-scaled (cumulative run score, not per-segment).
+  // Each fixed round scales its original score gap from 50% to 100%, then the
+  // existing colour-count adjustment is applied before gaps are accumulated.
   checkpoints() {
     const s = CONFIG.COLOUR_TARGET_SCALE[this.opts.colours] || 1;
-    return CONFIG.CHECKPOINTS.map(v => Math.round(v * s));
+    let previous = 0, total = 0;
+    return CONFIG.CHECKPOINTS.map((target, i) => {
+      total += Math.round((target - previous) * CONFIG.CHECKPOINT_DIFFICULTY[i] * s);
+      previous = target;
+      return total;
+    });
+  }
+
+  nextTarget() {
+    const cps = this.checkpoints();
+    return this.run.finalReached ? this.run.endlessTarget : cps[this.run.checkpointIdx];
   }
 
   computeMods() {
@@ -545,9 +560,10 @@ class Game {
     }
   }
 
-  startDraft() {
+  startDraft(replacement = false) {
     this.run.level++;
-    this.offers = this.makeOffers();
+    this.replacing = replacement;
+    this.offers = this.makeOffers(replacement);
     this.phase = 'draft';
     this.render();
   }
@@ -560,9 +576,10 @@ class Game {
     return w;
   }
 
-  makeOffers() {
-    const n = Math.max(2, Math.min(3, this.opts.draftOptions | 0));
+  makeOffers(replacement = false) {
+    const n = replacement ? 3 : Math.max(2, Math.min(3, this.opts.draftOptions | 0));
     const hasBoost = Object.keys(this.mods.boosts).length > 0;
+    const equipped = new Set(this.run.picks.map(p => p.id));
     const tierOk = d =>
       d.tier === 1 ||
       (d.tier === 2 && this.run.level >= CONFIG.STRONG_POWERUPS_FROM_LEVEL) ||
@@ -572,7 +589,9 @@ class Game {
       (!d.requiresBoost || hasBoost) && // boost-dependent picks never appear without a Colour boost
       (!d.requiresSquare || this.mods.square) && // square upgrades need Square match drafted
       tierOk(d) &&
-      (d.stackable || !this.run.picks.some(p => p.id === d.id)));
+      (replacement
+        ? !equipped.has(d.id) && d.id !== this.discardedId
+        : d.stackable || !equipped.has(d.id)));
     const offers = [];
     while (offers.length < n && pool.length) {
       const weights = pool.map(d => this.draftWeight(d));
@@ -590,19 +609,90 @@ class Game {
     // Log the whole offer set so telemetry can compute pick-rate-when-offered,
     // not just share-of-drafts.
     const key = o => o.id + (o.color !== undefined ? ':' + o.color : '');
-    this.run.draftHistory.push({ offered: this.offers.map(key), picked: key(this.offers[i]) });
+    const history = { offered: this.offers.map(key), picked: key(this.offers[i]) };
+    if (this.replacing) {
+      history.discardOffered = this.discardChoices;
+      history.discarded = this.discardedKey;
+      history.endlessRound = this.run.endlessRound + 1;
+    }
+    this.run.draftHistory.push(history);
     const pick = this.offers[i];
     this.run.picks.push(pick);
     this.computeMods();
     if (!this.board) { this.startRun(); return; }
     // Mid-run pick: apply one-time effects to the LIVE board — no regen.
-    this.growBoard();
+    this.growBoard(pick);
     this.dripSeedFor(pick); // new drip power-ups land their first spawn instantly
     const def = POWERUPS[pick.id];
     if (def.onRunStart) def.onRunStart(this, pick); // e.g. chomper hatches now
-    // One move can cross several checkpoints at once — settle every owed draft.
-    this.run.pendingDrafts = Math.max(0, this.run.pendingDrafts - 1);
-    if (this.run.pendingDrafts > 0) { this.startDraft(); return; }
+    this.replacing = false;
+    this.discardedId = null;
+    this.discardedKey = null;
+    this.discardChoices = null;
+    this.finishReward();
+  }
+
+  startDiscard() {
+    const byKey = new Map();
+    for (const pick of this.run.picks) {
+      const key = pick.id + (pick.color !== undefined ? ':' + pick.color : '');
+      if (byKey.has(key)) byKey.get(key).count++;
+      else byKey.set(key, { key, pick, count: 1 });
+    }
+    const pool = [...byKey.values()];
+    this.discardOffers = [];
+    while (this.discardOffers.length < 3 && pool.length) {
+      this.discardOffers.push(pool.splice(Math.floor(this.rng() * pool.length), 1)[0]);
+    }
+    this.phase = 'discard';
+    this.render();
+  }
+
+  discardOffer(i) {
+    if (this.phase !== 'discard' || !this.discardOffers[i]) return;
+    const choice = this.discardOffers[i];
+    const at = this.run.picks.findIndex(p =>
+      p.id === choice.pick.id && p.color === choice.pick.color);
+    this.run.picks.splice(at, 1);
+    this.discardChoices = this.discardOffers.map(o => o.key);
+    this.discardedId = choice.pick.id;
+    this.discardedKey = choice.key;
+    this.computeMods();
+    this.cleanupDiscard(choice.pick.id);
+    this.startDraft(true);
+  }
+
+  cleanupDiscard(id) {
+    while (this.marks.size > this.mods.marks) this.marks.delete(this.marks.values().next().value);
+    if (this.run.picks.some(p => p.id === id)) return;
+    if (id === 'pinata') { this.pinatas.clear(); this.drip.pinata = 0; }
+    if (id === 'tripletile') { this.triples.clear(); this.tripleArmed = false; this.drip.triple = 0; }
+    if (id === 'chests') { this.pendingChests = 0; this.drip.chest = 0; }
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < this.cols; c++) {
+      const tile = this.board[r][c];
+      if ((id === 'chomper' && tile.chomper) || (id === 'chests' && tile.chest))
+        this.replaceActor(r, c);
+      else if (id === 'countdown') tile.countdown = null;
+      else if (id === 'aftershock') delete tile.volatile;
+    }
+  }
+
+  replaceActor(r, c) {
+    const first = Math.floor(this.rng() * this.opts.colours);
+    for (let i = 0; i < this.opts.colours; i++) {
+      this.board[r][c] = this.makeTile((first + i) % this.opts.colours, true);
+      if (!this.findGroups().some(g => g.cells.some(cl => cl.r === r && cl.c === c))) return;
+    }
+  }
+
+  startNextReward() {
+    const reward = this.run.pendingRewards.shift();
+    if (reward === 'rotate') this.startDiscard();
+    else this.startDraft();
+  }
+
+  finishReward() {
+    if (this.run.pendingRewards.length) { this.startNextReward(); return; }
     if (!this.findAnyMove()) this.reshuffleBoard();
     this.phase = 'level';
     this.busy = false;
@@ -637,9 +727,13 @@ class Game {
   // Expand picks grow the live board: rows append at the BOTTOM, columns at
   // the RIGHT, so existing cell keys (marks/piñatas/triples) stay valid.
   // New tiles roll match-avoiding colours, so growth never fires a free cascade.
-  growBoard() {
-    const wantRows = Math.min(CONFIG.MAX_BOARD, CONFIG.BOARD_ROWS + this.mods.expandRows);
-    const wantCols = Math.min(CONFIG.MAX_BOARD, CONFIG.BOARD_COLS + this.mods.expandCols);
+  growBoard(pick) {
+    let wantRows = Math.min(CONFIG.MAX_BOARD, CONFIG.BOARD_ROWS + this.mods.expandRows);
+    let wantCols = Math.min(CONFIG.MAX_BOARD, CONFIG.BOARD_COLS + this.mods.expandCols);
+    // A discarded Expand never shrinks the live board. If it returns later,
+    // grow once more from the board's current size so the new pick is useful.
+    if (pick.id === 'expandrow' && this.rows >= wantRows) wantRows = Math.min(CONFIG.MAX_BOARD, this.rows + 1);
+    if (pick.id === 'expandcol' && this.cols >= wantCols) wantCols = Math.min(CONFIG.MAX_BOARD, this.cols + 1);
     while (this.rows < wantRows) {
       this.board.push(Array(this.cols).fill(null));
       this.rows++;
@@ -656,26 +750,44 @@ class Game {
 
   continueRun() {
     if (this.phase !== 'checkpoint') return;
-    this.startDraft();
+    this.startNextReward();
   }
 
-  // Replaces the base game's checkLevelEnd: cross every checkpoint the score
-  // now clears (grant moves + queue drafts), otherwise check for run end.
+  // Cross fixed checkpoints, then growing endless targets. Each crossed target
+  // queues its reward so a huge move still settles choices in the right order.
   checkProgress() {
     if (this.phase !== 'level') return;
     const cps = this.checkpoints();
-    let crossed = 0, granted = 0;
+    let crossed = 0, fixedCrossed = 0, endlessCrossed = 0, granted = 0, finalFlag = false;
     while (this.run.checkpointIdx < cps.length && this.score >= cps[this.run.checkpointIdx]) {
       const i = this.run.checkpointIdx++;
       const grant = CONFIG.CHECKPOINT_MOVES[Math.min(i, CONFIG.CHECKPOINT_MOVES.length - 1)];
-      this.movesLeft += grant; granted += grant; crossed++;
-      this.logSegment('clear');
-      this.run.pendingDrafts++;
+      this.movesLeft += grant; granted += grant; crossed++; fixedCrossed++;
+      this.logSegment('clear', cps[i], 0);
       this.tempoUsed = false; // Tempo re-arms for the new segment
-      if (this.run.checkpointIdx >= cps.length) this.run.finalReached = true;
+      const final = this.run.checkpointIdx >= cps.length;
+      this.run.pendingRewards.push(final ? 'rotate' : 'draft');
+      if (final) {
+        finalFlag = true;
+        this.run.finalReached = true;
+        this.run.endlessDelta = cps[cps.length - 1] - (cps[cps.length - 2] || 0);
+        this.run.endlessTarget = cps[cps.length - 1] + this.run.endlessDelta;
+      }
+    }
+    while (this.run.finalReached && this.score >= this.run.endlessTarget) {
+      const target = this.run.endlessTarget;
+      const grant = CONFIG.CHECKPOINT_MOVES[CONFIG.CHECKPOINT_MOVES.length - 1];
+      this.run.endlessRound++;
+      this.movesLeft += grant; granted += grant; crossed++; endlessCrossed++;
+      this.logSegment('clear', target, this.run.endlessRound);
+      this.run.pendingRewards.push('rotate');
+      this.tempoUsed = false;
+      this.run.endlessDelta = Math.round(this.run.endlessDelta * CONFIG.ENDLESS_SCORE_GROWTH);
+      this.run.endlessTarget += this.run.endlessDelta;
     }
     if (crossed) {
-      this.lastCheckpoint = { n: this.run.checkpointIdx, crossed, moves: granted, final: this.run.finalReached };
+      this.lastCheckpoint = { n: this.run.checkpointIdx, crossed, fixedCrossed, endlessCrossed,
+                              moves: granted, finalFlag, round: this.run.endlessRound };
       this.phase = 'checkpoint';
       return;
     }
@@ -685,17 +797,16 @@ class Game {
         this.movesLeft += CONFIG.LIFESAVER_BONUS_MOVES;
         this.callout(`🛟 Lifesaver! +${CONFIG.LIFESAVER_BONUS_MOVES} moves`);
       } else {
-        this.logSegment(this.run.finalReached ? 'end' : 'loss');
+        this.logSegment(this.run.finalReached ? 'end' : 'loss', this.nextTarget(),
+                        this.run.finalReached ? this.run.endlessRound + 1 : 0);
         this.phase = this.run.finalReached ? 'win' : 'loss';
       }
     }
   }
 
-  // One record per checkpoint SEGMENT (score/moves are deltas within it).
-  logSegment(result) {
+  // One record per fixed or endless round (score/moves are deltas within it).
+  logSegment(result, targetAbs = this.nextTarget(), endlessRound = 0) {
     const seg = ++this.run.segmentsLogged;
-    const cps = this.checkpoints();
-    const targetAbs = cps[Math.min(seg - 1, cps.length - 1)];
     const segScore = this.score - this.segStartScore;
     telemetrySave({
       t: Date.now(), seed: this.seed, level: seg, result, // level = segment number
@@ -707,6 +818,7 @@ class Game {
       picks: this.run.picks.map(p => p.id + (p.color !== undefined ? ':' + p.color : '')),
       draft: this.run.draftHistory[seg - 1] || null, // the draft that opened this segment
       rows: this.rows, cols: this.cols, draftOptions: this.opts.draftOptions,
+      endlessRound: endlessRound || null,
       colours: this.opts.colours, v: CONFIG.BALANCE_VERSION, variant: CONFIG.VARIANT,
       fast: !!this.fast, // bot/test runs — excluded from human summaries
     });
@@ -1778,7 +1890,7 @@ function MenuScreen({ G }) {
   const [seed, setSeed] = React.useState(() => String(1 + Math.floor(Math.random() * 999999999)));
   return h`<div className="screen menu">
     <h1>🏔️ Match-3 Roguelite — Ofir</h1>
-    <p className="sub">One board, one bar. Cross ${CONFIG.CHECKPOINTS.length} score checkpoints — each pays moves and a power-up draft — then chase a high score until your moves run out.</p>
+    <p className="sub">One board, one bar. Six rounds ramp from 50% to full difficulty, then endless rounds rotate one power-up and raise the next target.</p>
     <div className="menu-box">
       <label>Seed <input value=${seed} onChange=${e => setSeed(e.target.value)} inputMode="numeric" /></label>
       <${Toggle} G=${G} />
@@ -1988,24 +2100,26 @@ function LevelScreen({ G }) {
   const cps = G.checkpoints();
   const n = cps.length;
   const idx = G.run.checkpointIdx;
-  const next = idx < n ? cps[idx] : null;
+  const endless = G.run.finalReached;
+  const next = endless ? G.run.endlessTarget : cps[idx];
   // Equal-spaced checkpoint segments (linear score would cram the early flags
   // into the bar's first 10%); the fill interpolates within the live segment.
-  const prev = idx > 0 ? cps[idx - 1] : 0;
-  const frac = next !== null ? Math.max(0, Math.min(1, (G.score - prev) / (next - prev))) : 1;
-  const pct = Math.min(100, ((idx + frac) / n) * 100);
+  const prev = endless ? next - G.run.endlessDelta : (idx > 0 ? cps[idx - 1] : 0);
+  const frac = Math.max(0, Math.min(1, (G.score - prev) / (next - prev)));
+  const pct = endless ? frac * 100 : Math.min(100, ((idx + frac) / n) * 100);
   const cp = G.lastCheckpoint;
+  const reward = G.run.pendingRewards[0];
   return h`<div className="screen level-screen">
     <div className="hud">
-      <div className="hud-lv">🚩 ${G.run.checkpointIdx}/${cps.length}</div>
+      <div className="hud-lv">${endless ? `🔥 Round ${G.run.endlessRound + 1}` : `🚩 ${G.run.checkpointIdx}/${cps.length}`}</div>
       <div className="hud-score">
         <div className="bar runbar">
           <div className="fill" style=${{ width: pct + '%' }}></div>
-          ${cps.map((v, i) => h`<div key=${i} title=${v}
+          ${endless ? null : cps.map((v, i) => h`<div key=${i} title=${v}
             className=${'cp-tick' + (G.score >= v ? ' done' : '')}
             style=${{ left: ((i + 1) / n) * 100 + '%' }}></div>`)}
         </div>
-        <div className="nums">${G.score}${next !== null ? ` / ${next}` : h` <span className="endless">ENDLESS 🔥</span>`}${G.run.multiplier > 1 ? h`<span className="mult"> ×${G.run.multiplier}</span>` : null}</div>
+        <div className="nums">${G.score} / ${next}${G.run.multiplier > 1 ? h`<span className="mult"> ×${G.run.multiplier}</span>` : null}</div>
       </div>
       <div className=${'hud-moves' + (G.movesLeft <= 3 ? ' low' : '')}>👟 ${G.movesLeft}</div>
       ${G.fast ? h`<button className="fastbadge" title="Animations off (test mode) — tap to restore"
@@ -2018,12 +2132,32 @@ function LevelScreen({ G }) {
     <div className="callouts">${G.callouts.map(c => h`<div key=${c.id} className=${'callout ' + (c.cls || '')}>${c.text}</div>`)}</div>
     ${G.phase === 'checkpoint' && cp ? h`<div className="overlay">
       <div className="panel">
-        <h2>🚩 Checkpoint ${cp.n}${cp.crossed > 1 ? ` (×${cp.crossed} in one move!)` : ''}</h2>
-        <p>+${cp.moves} moves${cp.final ? ' — final flag planted! The endless chase begins 🔥' : ''}</p>
-        <button className="primary" onClick=${() => G.continueRun()}>Draft a power-up</button>
+        <h2>${cp.endlessCrossed
+          ? `🔥 Endless Round ${cp.round} complete`
+          : cp.finalFlag ? '🏁 Final checkpoint' : `🚩 Checkpoint ${cp.n}`}${cp.crossed > 1 ? ` (×${cp.crossed} in one move!)` : ''}</h2>
+        <p>+${cp.moves} moves${cp.finalFlag ? ' — Endless Round 1 begins' : ''}</p>
+        <button className="primary" onClick=${() => G.continueRun()}>${reward === 'rotate' ? 'Choose a power-up to discard' : 'Draft a power-up'}</button>
       </div>
     </div>` : null}
+    ${G.phase === 'discard' ? h`<${InlineDiscard} G=${G} />` : null}
     ${G.phase === 'draft' ? h`<${InlineDraft} G=${G} />` : null}
+  </div>`;
+}
+
+function InlineDiscard({ G }) {
+  return h`<div className="draft-inline discard-inline">
+    <div className="draft-inline-title">Endless Round ${G.run.endlessRound + 1} — discard one power-up</div>
+    <div className="cards">
+      ${G.discardOffers.map((o, i) => {
+        const pick = o.pick, def = POWERUPS[pick.id];
+        return h`<button className="card" key=${o.key} onClick=${() => G.discardOffer(i)}>
+          <div className="card-icon">${def.icon}${pick.color !== undefined ? h`<${ColorDot} color=${pick.color} />` : null}${o.count > 1 ? h`<b>×${o.count}</b>` : null}</div>
+          <div className="card-name">${def.name}${pick.color !== undefined ? ` — ${COLOR_NAMES[pick.color]}` : ''}</div>
+          <div className="card-desc">${def.desc(pick)}</div>
+          <div className="card-tag discard-tag">discard</div>
+        </button>`;
+      })}
+    </div>
   </div>`;
 }
 
@@ -2031,7 +2165,7 @@ function LevelScreen({ G }) {
 // in view (colour counts, marks, chest positions are part of the decision).
 function InlineDraft({ G }) {
   return h`<div className="draft-inline">
-    <div className="draft-inline-title">Draft ${G.run.level} — pick a power-up</div>
+    <div className="draft-inline-title">${G.replacing ? `Endless Round ${G.run.endlessRound + 1} — choose a replacement` : `Draft ${G.run.level} — pick a power-up`}</div>
     <div className="cards">
       ${G.offers.map((o, i) => {
         const def = POWERUPS[o.id];
@@ -2060,6 +2194,7 @@ function EndScreen({ G }) {
     <h1>${win ? '🏆 Summit reached!' : '💀 Out of moves'}</h1>
     <div className="end-stats">
       <div><b>${G.run.checkpointIdx}</b> / ${CONFIG.CHECKPOINTS.length} checkpoints crossed</div>
+      ${G.run.finalReached ? h`<div><b>${G.run.endlessRound}</b> endless rounds completed</div>` : null}
       <div><b>${G.score}</b> final score</div>
       <div className="seedline">seed ${G.seed}</div>
     </div>
@@ -2092,8 +2227,8 @@ function App() {
       game: G, CONFIG, POWERUPS,
       telemetry: { all: telemetryAll, summary: telemetrySummary, clear: telemetryClear },
       cheat: {
-        // jump the score to the next checkpoint (base game's cheat.win analogue)
-        cross() { const cps = G.checkpoints(); if (G.run.checkpointIdx < cps.length) { G.score = cps[G.run.checkpointIdx]; G.checkProgress(); G.render(); } },
+        // jump the score to the next fixed or endless target
+        cross() { const target = G.nextTarget(); if (target !== undefined) { G.score = target; G.checkProgress(); G.render(); } },
         win() { this.cross(); },
         addScore(n) { G.score += n; G.checkProgress(); G.render(); },
         setMoves(n) { G.movesLeft = n; G.render(); },
@@ -2102,6 +2237,17 @@ function App() {
     };
   }
   const G = ref.current;
+  const playing = !['menu', 'win', 'loss'].includes(G.phase);
+  React.useEffect(() => {
+    if (!playing) return;
+    const stopBack = () => history.pushState({ match3Run: true }, '', location.href);
+    stopBack();
+    addEventListener('popstate', stopBack);
+    return () => {
+      removeEventListener('popstate', stopBack);
+      if (history.state?.match3Run) history.back();
+    };
+  }, [playing]);
   if (G.phase === 'menu') return h`<${MenuScreen} G=${G} />`;
   // Run-start draft has no board yet → full screen. Mid-run drafts render
   // inside LevelScreen so the board stays visible (tester feedback).
