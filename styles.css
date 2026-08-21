@@ -366,24 +366,39 @@ button.primary {
 .draft-inline .card-name { font-size: 12.5px; }
 .draft-inline .card-desc { font-size: 11px; line-height: 1.35; }
 .draft-inline .card-tag { font-size: 9.5px; }
-.discard-inline .draft-inline-title { color: #ff9a7a; }
-.discard-inline .card { border-color: #6c3b43; }
-.discard-inline .discard-tag { background: #4a292e; color: #ff9a7a; }
+.discard-inline .draft-inline-title {
+  color: #fff; background: #8f2825; border: 1px solid #ff6b61;
+  border-radius: 10px; padding: 7px; font-size: 16px; letter-spacing: .06em;
+}
+.discard-inline .card { border-color: #8f4148; }
+.discard-inline .discard-tag {
+  background: #a82a22; color: #fff; font-size: 11px; font-weight: 900;
+  box-shadow: 0 0 12px rgba(255, 90, 76, .35);
+}
+.part2-cost { display: flex; flex-direction: column; align-items: center; }
+.move-cost-label {
+  color: #fff; background: #a82a22; border-radius: 99px;
+  padding: 2px 6px; margin-top: 2px; font-size: 9px; text-transform: uppercase;
+}
+.panel .part2-rule {
+  color: #fff; background: #8f2825; border: 1px solid #ff6b61;
+  border-radius: 10px; padding: 9px 12px; font-weight: 800;
+}
+.panel .part2-rule b { color: #fff; }
 
-/* Part 2 keeps the same effects, played at double speed. */
-.part2 .board.shake { animation-duration: .15s; }
-.part2 .tile { transition-duration: .11s; }
-.part2 .tin.pop { animation-duration: .075s; }
-.part2 .tin.pop.boom { animation-duration: .14s; }
-.part2 .tin.pop.zap, .part2 .tin.pop.lava { animation-duration: .15s; }
-.part2 .tin.pop.line { animation-duration: .11s; }
-.part2 .tin.pop.sweep { animation-duration: .13s; }
-.part2 .tin.sp.pop { animation-duration: .125s; }
-.part2 .particle, .part2 .tin.chomping { animation-duration: .25s; }
-.part2 .tin.wiggle, .part2 .tin.fresh { animation-duration: .175s; }
-.part2 .tin.cflash { animation-duration: .3s; }
-.part2 .wavefx { animation-duration: .275s; }
-.part2 .fx { animation-duration: .4s; }
-.part2 .fx.combo { animation-duration: .5s; }
-.part2 .callout { animation-duration: .75s; }
-.part2 .panel, .part2 .draft-inline { animation-duration: .125s; }
+/* Part 2 accelerates from cascade 2; the initial match and cascade 1 stay normal. */
+.part2.cascade-fast .board.shake { animation-duration: .15s; }
+.part2.cascade-fast .tile { transition-duration: .11s; }
+.part2.cascade-fast .tin.pop { animation-duration: .075s; }
+.part2.cascade-fast .tin.pop.boom { animation-duration: .14s; }
+.part2.cascade-fast .tin.pop.zap, .part2.cascade-fast .tin.pop.lava { animation-duration: .15s; }
+.part2.cascade-fast .tin.pop.line { animation-duration: .11s; }
+.part2.cascade-fast .tin.pop.sweep { animation-duration: .13s; }
+.part2.cascade-fast .tin.sp.pop { animation-duration: .125s; }
+.part2.cascade-fast .particle, .part2.cascade-fast .tin.chomping { animation-duration: .25s; }
+.part2.cascade-fast .tin.wiggle, .part2.cascade-fast .tin.fresh { animation-duration: .175s; }
+.part2.cascade-fast .tin.cflash { animation-duration: .3s; }
+.part2.cascade-fast .wavefx { animation-duration: .275s; }
+.part2.cascade-fast .fx { animation-duration: .4s; }
+.part2.cascade-fast .fx.combo { animation-duration: .5s; }
+.part2.cascade-fast .callout { animation-duration: .75s; }

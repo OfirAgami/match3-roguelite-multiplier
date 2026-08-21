@@ -15,7 +15,7 @@ const CONFIG = {
   // Stamped into every telemetry record so balance passes only compare runs
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
-  BALANCE_VERSION: 4, // v4: 50-100% opening ramp + growing endless power-up rotations
+  BALANCE_VERSION: 5, // v5: lighter Part 2 targets + cascade-only speed-up
   VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
@@ -32,6 +32,7 @@ const CONFIG = {
   CHECKPOINTS: [80, 250, 520, 900, 1500, 2500],
   CHECKPOINT_DIFFICULTY: [0.5, 0.6, 0.7, 0.8, 0.9, 1],
   ENDLESS_SCORE_GROWTH: 1.25,
+  PART_2_TARGET_SCALE: 0.5,
   PART_2_MOVE_COST: 2,
   PART_2_ANIMATION_SPEED: 2,
   START_MOVES: 10,                 // opening move pool (base L1 budget)
@@ -485,7 +486,7 @@ class Game {
     this.phase = 'menu';          // menu | draft | discard | level | checkpoint | win | loss
     this.opts = { draftOptions: CONFIG.DRAFT_OPTIONS, colours: CONFIG.COLOURS };
     this.fx = []; this.callouts = []; this.fxId = 1; this.tileId = 1;
-    this.busy = false; this.shake = false;
+    this.busy = false; this.shake = false; this.cascadeFast = false;
     this.pinatas = new Map(); this.triples = new Set(); this.tripleArmed = false;
     this.marks = new Set();
     this.drip = { mark: 0, pinata: 0, chest: 0, triple: 0 }; // dry-move pity counters
@@ -497,7 +498,7 @@ class Game {
 
   render() { this.onRender(); }
   moveCost() { return this.run?.finalReached ? CONFIG.PART_2_MOVE_COST : 1; }
-  animationMs(ms) { return this.run?.finalReached ? Math.round(ms / CONFIG.PART_2_ANIMATION_SPEED) : ms; }
+  animationMs(ms) { return this.run?.finalReached && this.cascadeFast ? Math.round(ms / CONFIG.PART_2_ANIMATION_SPEED) : ms; }
   // fast=true skips animation delays (scripted testing; hidden tabs throttle timers)
   sleep(ms) { return this.fast ? Promise.resolve() : new Promise(res => setTimeout(res, this.animationMs(ms))); }
   emptyMods() {
@@ -774,7 +775,7 @@ class Game {
       if (final) {
         finalFlag = true;
         this.run.finalReached = true;
-        this.run.endlessDelta = cps[cps.length - 1] - (cps[cps.length - 2] || 0);
+        this.run.endlessDelta = Math.round((cps[cps.length - 1] - (cps[cps.length - 2] || 0)) * CONFIG.PART_2_TARGET_SCALE);
         this.run.endlessTarget = cps[cps.length - 1] + this.run.endlessDelta;
       }
     }
@@ -1495,9 +1496,11 @@ class Game {
 
   async resolveBoard(swapCells) {
     let cascades = 0;
+    this.cascadeFast = false;
     while (cascades++ < CONFIG.MAX_CASCADES) {
       const groups = this.findGroups();
       if (!groups.length) break;
+      this.cascadeFast = cascades > 2;
       // cascades announce themselves so chains read as a building combo
       if (cascades >= CONFIG.COMBO_CALLOUT_FROM) {
         this.addFx(-0.7, this.cols / 2 - 0.5, `Combo ×${cascades}${cascades >= 4 ? ' 🔥' : ''}`, 'combo');
@@ -1510,6 +1513,7 @@ class Game {
       await this.dropAndFill();
       await this.sleep(CONFIG.STEP_PAUSE);
     }
+    this.cascadeFast = false;
   }
 
   async explodeSeeds(seeds) {
@@ -2114,7 +2118,7 @@ function LevelScreen({ G }) {
   const pct = endless ? frac * 100 : Math.min(100, ((idx + frac) / n) * 100);
   const cp = G.lastCheckpoint;
   const reward = G.run.pendingRewards[0];
-  return h`<div className=${'screen level-screen' + (endless ? ' part2' : '')}>
+  return h`<div className=${'screen level-screen' + (endless ? ' part2' : '') + (G.cascadeFast ? ' cascade-fast' : '')}>
     <div className="hud">
       <div className="hud-lv">${endless ? `🔥 Round ${G.run.endlessRound + 1}` : `🚩 ${G.run.checkpointIdx}/${cps.length}`}</div>
       <div className="hud-score">
@@ -2126,7 +2130,10 @@ function LevelScreen({ G }) {
         </div>
         <div className="nums">${G.score} / ${next}${G.run.multiplier > 1 ? h`<span className="mult"> ×${G.run.multiplier}</span>` : null}</div>
       </div>
-      <div className=${'hud-moves' + (G.movesLeft <= 3 ? ' low' : '')}>👟 ${G.movesLeft}</div>
+      <div className=${'hud-moves' + (G.movesLeft <= 3 ? ' low' : '') + (endless ? ' part2-cost' : '')}>
+        <span>👟 ${G.movesLeft}</span>
+        ${endless ? h`<span className="move-cost-label">−${CONFIG.PART_2_MOVE_COST} / move</span>` : null}
+      </div>
       ${G.fast ? h`<button className="fastbadge" title="Animations off (test mode) — tap to restore"
         onClick=${() => { G.fast = false; G.render(); }}>⏩</button>` : null}
     </div>
@@ -2141,7 +2148,7 @@ function LevelScreen({ G }) {
           ? `🔥 Endless Round ${cp.round} complete`
           : cp.finalFlag ? '🏁 Final checkpoint' : `🚩 Checkpoint ${cp.n}`}${cp.crossed > 1 ? ` (×${cp.crossed} in one move!)` : ''}</h2>
         <p>+${cp.moves} moves${cp.finalFlag ? ' — Part 2 begins' : ''}</p>
-        ${cp.finalFlag ? h`<p><b>Animations are 2× faster. Every move costs ${CONFIG.PART_2_MOVE_COST} 👟.</b></p>` : null}
+        ${cp.finalFlag ? h`<p className="part2-rule">PART 2 · <b>−${CONFIG.PART_2_MOVE_COST} 👟 EVERY MOVE</b></p>` : null}
         <button className="primary" onClick=${() => G.continueRun()}>${reward === 'rotate' ? 'Choose a power-up to discard' : 'Draft a power-up'}</button>
       </div>
     </div>` : null}
@@ -2152,7 +2159,7 @@ function LevelScreen({ G }) {
 
 function InlineDiscard({ G }) {
   return h`<div className="draft-inline discard-inline">
-    <div className="draft-inline-title">Endless Round ${G.run.endlessRound + 1} — discard one power-up</div>
+    <div className="draft-inline-title">✕ DISCARD ONE POWER-UP</div>
     <div className="cards">
       ${G.discardOffers.map((o, i) => {
         const pick = o.pick, def = POWERUPS[pick.id];
@@ -2160,7 +2167,7 @@ function InlineDiscard({ G }) {
           <div className="card-icon">${def.icon}${pick.color !== undefined ? h`<${ColorDot} color=${pick.color} />` : null}${o.count > 1 ? h`<b>×${o.count}</b>` : null}</div>
           <div className="card-name">${def.name}${pick.color !== undefined ? ` — ${COLOR_NAMES[pick.color]}` : ''}</div>
           <div className="card-desc">${def.desc(pick)}</div>
-          <div className="card-tag discard-tag">discard</div>
+          <div className="card-tag discard-tag">✕ discard</div>
         </button>`;
       })}
     </div>
