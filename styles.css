@@ -386,19 +386,19 @@ button.primary {
 }
 .panel .part2-rule b { color: #fff; }
 
-/* Part 2 accelerates from cascade 2; the initial match and cascade 1 stay normal. */
-.part2.cascade-fast .board.shake { animation-duration: .15s; }
-.part2.cascade-fast .tile { transition-duration: .11s; }
-.part2.cascade-fast .tin.pop { animation-duration: .075s; }
-.part2.cascade-fast .tin.pop.boom { animation-duration: .14s; }
-.part2.cascade-fast .tin.pop.zap, .part2.cascade-fast .tin.pop.lava { animation-duration: .15s; }
-.part2.cascade-fast .tin.pop.line { animation-duration: .11s; }
-.part2.cascade-fast .tin.pop.sweep { animation-duration: .13s; }
-.part2.cascade-fast .tin.sp.pop { animation-duration: .125s; }
-.part2.cascade-fast .particle, .part2.cascade-fast .tin.chomping { animation-duration: .25s; }
-.part2.cascade-fast .tin.wiggle, .part2.cascade-fast .tin.fresh { animation-duration: .175s; }
-.part2.cascade-fast .tin.cflash { animation-duration: .3s; }
-.part2.cascade-fast .wavefx { animation-duration: .275s; }
-.part2.cascade-fast .fx { animation-duration: .4s; }
-.part2.cascade-fast .fx.combo { animation-duration: .5s; }
-.part2.cascade-fast .callout { animation-duration: .75s; }
+/* Part 2: cascade 1 is 1.2× speed, then each cascade is another 1.2× faster. */
+.part2.cascade-fast .board.shake { animation-duration: calc(.3s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tile { transition-duration: calc(.22s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.pop { animation-duration: calc(.15s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.pop.boom { animation-duration: calc(.28s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.pop.zap, .part2.cascade-fast .tin.pop.lava { animation-duration: calc(.3s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.pop.line { animation-duration: calc(.22s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.pop.sweep { animation-duration: calc(.26s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.sp.pop { animation-duration: calc(.25s * var(--cascade-time-scale)); }
+.part2.cascade-fast .particle, .part2.cascade-fast .tin.chomping { animation-duration: calc(.5s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.wiggle, .part2.cascade-fast .tin.fresh { animation-duration: calc(.35s * var(--cascade-time-scale)); }
+.part2.cascade-fast .tin.cflash { animation-duration: calc(.6s * var(--cascade-time-scale)); }
+.part2.cascade-fast .wavefx { animation-duration: calc(.55s * var(--cascade-time-scale)); }
+.part2.cascade-fast .fx { animation-duration: calc(.8s * var(--cascade-time-scale)); }
+.part2.cascade-fast .fx.combo { animation-duration: calc(1s * var(--cascade-time-scale)); }
+.part2.cascade-fast .callout { animation-duration: calc(1.5s * var(--cascade-time-scale)); }

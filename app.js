@@ -15,7 +15,7 @@ const CONFIG = {
   // Stamped into every telemetry record so balance passes only compare runs
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
-  BALANCE_VERSION: 5, // v5: lighter Part 2 targets + cascade-only speed-up
+  BALANCE_VERSION: 6, // v6: progressive cascades + 1.5× Part 2 targets/rewards
   VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
@@ -32,9 +32,10 @@ const CONFIG = {
   CHECKPOINTS: [80, 250, 520, 900, 1500, 2500],
   CHECKPOINT_DIFFICULTY: [0.5, 0.6, 0.7, 0.8, 0.9, 1],
   ENDLESS_SCORE_GROWTH: 1.25,
-  PART_2_TARGET_SCALE: 0.5,
+  PART_2_TARGET_SCALE: 0.75,
+  PART_2_ROUND_MOVES: 12,
   PART_2_MOVE_COST: 2,
-  PART_2_ANIMATION_SPEED: 2,
+  PART_2_CASCADE_SPEED_STEP: 1.2,
   START_MOVES: 10,                 // opening move pool (base L1 budget)
   // Moves granted on crossing checkpoint i; the last entry is the victory-lap
   // grant past the final flag (halved in v3 — the endless economy self-extends:
@@ -486,7 +487,7 @@ class Game {
     this.phase = 'menu';          // menu | draft | discard | level | checkpoint | win | loss
     this.opts = { draftOptions: CONFIG.DRAFT_OPTIONS, colours: CONFIG.COLOURS };
     this.fx = []; this.callouts = []; this.fxId = 1; this.tileId = 1;
-    this.busy = false; this.shake = false; this.cascadeFast = false;
+    this.busy = false; this.shake = false; this.cascadeSpeed = 1;
     this.pinatas = new Map(); this.triples = new Set(); this.tripleArmed = false;
     this.marks = new Set();
     this.drip = { mark: 0, pinata: 0, chest: 0, triple: 0 }; // dry-move pity counters
@@ -498,7 +499,7 @@ class Game {
 
   render() { this.onRender(); }
   moveCost() { return this.run?.finalReached ? CONFIG.PART_2_MOVE_COST : 1; }
-  animationMs(ms) { return this.run?.finalReached && this.cascadeFast ? Math.round(ms / CONFIG.PART_2_ANIMATION_SPEED) : ms; }
+  animationMs(ms) { return this.run?.finalReached ? Math.round(ms / this.cascadeSpeed) : ms; }
   // fast=true skips animation delays (scripted testing; hidden tabs throttle timers)
   sleep(ms) { return this.fast ? Promise.resolve() : new Promise(res => setTimeout(res, this.animationMs(ms))); }
   emptyMods() {
@@ -781,7 +782,7 @@ class Game {
     }
     while (this.run.finalReached && this.score >= this.run.endlessTarget) {
       const target = this.run.endlessTarget;
-      const grant = CONFIG.CHECKPOINT_MOVES[CONFIG.CHECKPOINT_MOVES.length - 1];
+      const grant = CONFIG.PART_2_ROUND_MOVES;
       this.run.endlessRound++;
       this.movesLeft += grant; granted += grant; crossed++; endlessCrossed++;
       this.logSegment('clear', target, this.run.endlessRound);
@@ -1496,11 +1497,11 @@ class Game {
 
   async resolveBoard(swapCells) {
     let cascades = 0;
-    this.cascadeFast = false;
+    this.cascadeSpeed = 1;
     while (cascades++ < CONFIG.MAX_CASCADES) {
       const groups = this.findGroups();
       if (!groups.length) break;
-      this.cascadeFast = cascades > 2;
+      this.cascadeSpeed = cascades > 1 ? CONFIG.PART_2_CASCADE_SPEED_STEP ** (cascades - 1) : 1;
       // cascades announce themselves so chains read as a building combo
       if (cascades >= CONFIG.COMBO_CALLOUT_FROM) {
         this.addFx(-0.7, this.cols / 2 - 0.5, `Combo ×${cascades}${cascades >= 4 ? ' 🔥' : ''}`, 'combo');
@@ -1513,7 +1514,7 @@ class Game {
       await this.dropAndFill();
       await this.sleep(CONFIG.STEP_PAUSE);
     }
-    this.cascadeFast = false;
+    this.cascadeSpeed = 1;
   }
 
   async explodeSeeds(seeds) {
@@ -2118,7 +2119,8 @@ function LevelScreen({ G }) {
   const pct = endless ? frac * 100 : Math.min(100, ((idx + frac) / n) * 100);
   const cp = G.lastCheckpoint;
   const reward = G.run.pendingRewards[0];
-  return h`<div className=${'screen level-screen' + (endless ? ' part2' : '') + (G.cascadeFast ? ' cascade-fast' : '')}>
+  return h`<div className=${'screen level-screen' + (endless ? ' part2' : '') + (G.cascadeSpeed > 1 ? ' cascade-fast' : '')}
+    style=${{ '--cascade-time-scale': 1 / G.cascadeSpeed }}>
     <div className="hud">
       <div className="hud-lv">${endless ? `🔥 Round ${G.run.endlessRound + 1}` : `🚩 ${G.run.checkpointIdx}/${cps.length}`}</div>
       <div className="hud-score">
