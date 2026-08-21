@@ -15,7 +15,7 @@ const CONFIG = {
   // Stamped into every telemetry record so balance passes only compare runs
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
-  BALANCE_VERSION: 6, // v6: progressive cascades + 1.5× Part 2 targets/rewards
+  BALANCE_VERSION: 7, // v7: one move cost, progressive cascades everywhere, shared move bar
   VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
@@ -34,12 +34,11 @@ const CONFIG = {
   ENDLESS_SCORE_GROWTH: 1.25,
   PART_2_TARGET_SCALE: 0.75,
   PART_2_ROUND_MOVES: 12,
-  PART_2_MOVE_COST: 2,
-  PART_2_CASCADE_SPEED_STEP: 1.2,
+  CASCADE_SPEED_STEP: 1.2,
   START_MOVES: 10,                 // opening move pool (base L1 budget)
   // Moves granted on crossing checkpoint i; the last entry is the victory-lap
   // grant past the final flag (halved in v3 — the endless economy self-extends:
-  // refunds/momentum/chests stretched 16 grant moves into 40-60-move laps).
+  // bonus moves/chests stretched 16 grant moves into 40-60-move laps).
   CHECKPOINT_MOVES: [10, 12, 13, 14, 15, 8],
   DRAFT_OPTIONS: 3,                // 2 or 3 — also toggleable in the UI
 
@@ -319,7 +318,7 @@ const POWERUPS = {
   },
   xtramove: {
     id: 'xtramove', name: 'Xtra move tiles', icon: '🔄', cluster: 'utility', stackable: true,
-    desc: () => 'One 🔄 cell is always on the board; matching over it refunds the move, and a new one pops up elsewhere (stacks: +1 cell each, max 1 refund per move)',
+    desc: () => 'One 🔄 cell is always on the board; matching over it fills the shared 🚀 bar, and a new one pops up elsewhere (stacks: +1 cell each)',
     mods(m) { m.marks += 1; }, // m.marks = how many marks live on the board at once
   },
   square: {
@@ -395,14 +394,7 @@ const POWERUPS = {
     onMatch(g, p, group, api) {
       if (!group.active || group.cells.length < 4 || group._momentumCounted) return;
       group._momentumCounted = true;
-      g.run.momentum = (g.run.momentum || 0) + 1;
-      const picks = g.run.picks.filter(x => x.id === 'momentum').length;
-      const need = Math.max(CONFIG.MOMENTUM_MIN, CONFIG.MOMENTUM_BASE - (picks - 1));
-      if (g.run.momentum >= need) {
-        g.run.momentum -= need;
-        g.movesLeft++;
-        g.callout('🚀 Momentum: +1 move!');
-      }
+      g.chargeMomentum();
     },
   },
   purge: {
@@ -498,8 +490,19 @@ class Game {
   }
 
   render() { this.onRender(); }
-  moveCost() { return this.run?.finalReached ? CONFIG.PART_2_MOVE_COST : 1; }
-  animationMs(ms) { return this.run?.finalReached ? Math.round(ms / this.cascadeSpeed) : ms; }
+  animationMs(ms) { return Math.round(ms / this.cascadeSpeed); }
+  momentumNeed() {
+    const picks = this.run.picks.filter(p => p.id === 'momentum').length;
+    return Math.max(CONFIG.MOMENTUM_MIN, CONFIG.MOMENTUM_BASE - Math.max(0, picks - 1));
+  }
+  chargeMomentum() {
+    this.run.momentum++;
+    const need = this.momentumNeed();
+    if (this.run.momentum < need) return;
+    this.run.momentum -= need;
+    this.movesLeft++;
+    this.callout('🚀 Bonus move: +1 move!');
+  }
   // fast=true skips animation delays (scripted testing; hidden tabs throttle timers)
   sleep(ms) { return this.fast ? Promise.resolve() : new Promise(res => setTimeout(res, this.animationMs(ms))); }
   emptyMods() {
@@ -797,7 +800,7 @@ class Game {
       this.phase = 'checkpoint';
       return;
     }
-    if (this.movesLeft < this.moveCost()) {
+    if (this.movesLeft <= 0) {
       if (this.mods.lifesaver && !this.run.lifesaverUsed) {
         this.run.lifesaverUsed = true;
         this.movesLeft += CONFIG.LIFESAVER_BONUS_MOVES;
@@ -1302,14 +1305,10 @@ class Game {
       }
     }
 
-    // Xtra-move marks: clearing a marked cell refunds this move.
-    // Only ONE mark is consumed per move — matching over two leaves the second.
-    if (!this.refund) {
-      for (const { r, c, kind } of cleared.values()) {
-        if (kind === 'lava') continue; // board effects don't earn refunds (the mark survives)
-        const k = K(r, c);
-        if (this.marks.has(k)) { this.marks.delete(k); this.refund = true; break; }
-      }
+    // Xtra-move marks charge the same bonus-move bar as Momentum.
+    for (const { r, c, kind } of cleared.values()) {
+      if (kind === 'lava') continue; // board effects don't charge the bar (the mark survives)
+      if (this.marks.delete(K(r, c))) this.chargeMomentum();
     }
 
     // Piñata cells: every clear over one (match, cascade, or explosion) is a hit.
@@ -1501,7 +1500,7 @@ class Game {
     while (cascades++ < CONFIG.MAX_CASCADES) {
       const groups = this.findGroups();
       if (!groups.length) break;
-      this.cascadeSpeed = cascades > 1 ? CONFIG.PART_2_CASCADE_SPEED_STEP ** (cascades - 1) : 1;
+      this.cascadeSpeed = cascades > 1 ? CONFIG.CASCADE_SPEED_STEP ** (cascades - 1) : 1;
       // cascades announce themselves so chains read as a building combo
       if (cascades >= CONFIG.COMBO_CALLOUT_FROM) {
         this.addFx(-0.7, this.cols / 2 - 0.5, `Combo ×${cascades}${cascades >= 4 ? ' 🔥' : ''}`, 'combo');
@@ -1708,12 +1707,10 @@ class Game {
       return;
     }
 
-    const moveCost = this.moveCost();
-    this.movesLeft -= moveCost;
+    this.movesLeft--;
     this.moveNum++;
     if (this.run.picks.some(p => p.id === 'snowball')) this.run.snowball++;
     this.lastSwapDir = { dr: b.r - a.r, dc: b.c - a.c };
-    this.refund = false;
     const preMoveScore = this.score;
     if (merge) {
       this.callout('✨ Merge!');
@@ -1743,9 +1740,8 @@ class Game {
         this.callout(`3️⃣ Move ×${CONFIG.TRIPLE_TILE_MULT}!`);
       }
     }
-    if (this.refund) { this.movesLeft += moveCost; this.callout('🔄 Free move!'); }
     this.moveScores.push(this.score - preMoveScore);
-    if (!this.refund) this.movesUsed++;
+    this.movesUsed++;
 
     if (!this.findAnyMove()) {
       this.callout('No moves — shuffling');
@@ -1754,7 +1750,7 @@ class Game {
     }
     this.dripRolls(); // per-move spawns (marks/piñatas/triples/chest queue)
     this.checkProgress();
-    this.warnLowMoves(); // after refunds/chests/lifesaver settle the real count
+    this.warnLowMoves(); // after bonus moves/chests/lifesaver settle the real count
     this.busy = false;
     this.render();
   }
@@ -2069,7 +2065,7 @@ function PowerBar({ G }) {
   const chips = buildChips(G);
   if (!chips.length) return null;
   return h`<div className="powerbar">
-    ${info !== null && chips[info] ? h`<div className="chip-info">${chips[info].def.desc(chips[info].pick)}${chips[info].def.id === 'fillup' ? ` — ${G.run.fillCount - CONFIG.FILL_UP_THRESHOLD * G.run.fillTriggers}/${CONFIG.FILL_UP_THRESHOLD}` : ''}${chips[info].def.id === 'momentum' ? ` — ${G.run.momentum || 0}/${Math.max(CONFIG.MOMENTUM_MIN, CONFIG.MOMENTUM_BASE - (chips[info].count - 1))}` : ''}</div>` : null}
+    ${info !== null && chips[info] ? h`<div className="chip-info">${chips[info].def.desc(chips[info].pick)}${chips[info].def.id === 'fillup' ? ` — ${G.run.fillCount - CONFIG.FILL_UP_THRESHOLD * G.run.fillTriggers}/${CONFIG.FILL_UP_THRESHOLD}` : ''}${['xtramove', 'momentum'].includes(chips[info].def.id) ? ` — ${G.run.momentum || 0}/${G.momentumNeed()}` : ''}</div>` : null}
     <div className="chip-row">
       ${chips.map((ch, i) => h`<button key=${ch.key}
         className=${'chip' + (ch.def.id === 'lifesaver' && G.run.lifesaverUsed ? ' used' : '') + (info === i ? ' active' : '')}
@@ -2093,12 +2089,11 @@ function FillupMeter({ G }) {
 }
 
 function MomentumMeter({ G }) {
-  const picks = G.run.picks.filter(p => p.id === 'momentum').length;
-  if (!picks) return null;
-  const need = Math.max(CONFIG.MOMENTUM_MIN, CONFIG.MOMENTUM_BASE - (picks - 1));
+  if (!G.run.picks.some(p => p.id === 'momentum' || p.id === 'xtramove')) return null;
+  const need = G.momentumNeed();
   const cur = Math.min(G.run.momentum || 0, need);
   const pct = Math.min(100, Math.round((cur / need) * 100));
-  return h`<div className="fillmeter" title="Momentum: 4+ matches you make charge a bonus move">
+  return h`<div className="fillmeter" title="Momentum matches and Xtra move tiles charge a bonus move">
     <span className="fill-icon">🚀</span>
     <div className="fill-bar"><div className="fill-fill mfill" style=${{ width: pct + '%' }}></div></div>
     <span className="fill-nums">${cur}/${need}</span>
@@ -2132,9 +2127,8 @@ function LevelScreen({ G }) {
         </div>
         <div className="nums">${G.score} / ${next}${G.run.multiplier > 1 ? h`<span className="mult"> ×${G.run.multiplier}</span>` : null}</div>
       </div>
-      <div className=${'hud-moves' + (G.movesLeft <= 3 ? ' low' : '') + (endless ? ' part2-cost' : '')}>
+      <div className=${'hud-moves' + (G.movesLeft <= 3 ? ' low' : '')}>
         <span>👟 ${G.movesLeft}</span>
-        ${endless ? h`<span className="move-cost-label">−${CONFIG.PART_2_MOVE_COST} / move</span>` : null}
       </div>
       ${G.fast ? h`<button className="fastbadge" title="Animations off (test mode) — tap to restore"
         onClick=${() => { G.fast = false; G.render(); }}>⏩</button>` : null}
@@ -2150,7 +2144,6 @@ function LevelScreen({ G }) {
           ? `🔥 Endless Round ${cp.round} complete`
           : cp.finalFlag ? '🏁 Final checkpoint' : `🚩 Checkpoint ${cp.n}`}${cp.crossed > 1 ? ` (×${cp.crossed} in one move!)` : ''}</h2>
         <p>+${cp.moves} moves${cp.finalFlag ? ' — Part 2 begins' : ''}</p>
-        ${cp.finalFlag ? h`<p className="part2-rule">PART 2 · <b>−${CONFIG.PART_2_MOVE_COST} 👟 EVERY MOVE</b></p>` : null}
         <button className="primary" onClick=${() => G.continueRun()}>${reward === 'rotate' ? 'Choose a power-up to discard' : 'Draft a power-up'}</button>
       </div>
     </div>` : null}

@@ -375,30 +375,19 @@ button.primary {
   background: #a82a22; color: #fff; font-size: 11px; font-weight: 900;
   box-shadow: 0 0 12px rgba(255, 90, 76, .35);
 }
-.part2-cost { display: flex; flex-direction: column; align-items: center; }
-.move-cost-label {
-  color: #fff; background: #a82a22; border-radius: 99px;
-  padding: 2px 6px; margin-top: 2px; font-size: 9px; text-transform: uppercase;
-}
-.panel .part2-rule {
-  color: #fff; background: #8f2825; border: 1px solid #ff6b61;
-  border-radius: 10px; padding: 9px 12px; font-weight: 800;
-}
-.panel .part2-rule b { color: #fff; }
-
-/* Part 2: cascade 1 is 1.2× speed, then each cascade is another 1.2× faster. */
-.part2.cascade-fast .board.shake { animation-duration: calc(.3s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tile { transition-duration: calc(.22s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.pop { animation-duration: calc(.15s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.pop.boom { animation-duration: calc(.28s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.pop.zap, .part2.cascade-fast .tin.pop.lava { animation-duration: calc(.3s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.pop.line { animation-duration: calc(.22s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.pop.sweep { animation-duration: calc(.26s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.sp.pop { animation-duration: calc(.25s * var(--cascade-time-scale)); }
-.part2.cascade-fast .particle, .part2.cascade-fast .tin.chomping { animation-duration: calc(.5s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.wiggle, .part2.cascade-fast .tin.fresh { animation-duration: calc(.35s * var(--cascade-time-scale)); }
-.part2.cascade-fast .tin.cflash { animation-duration: calc(.6s * var(--cascade-time-scale)); }
-.part2.cascade-fast .wavefx { animation-duration: calc(.55s * var(--cascade-time-scale)); }
-.part2.cascade-fast .fx { animation-duration: calc(.8s * var(--cascade-time-scale)); }
-.part2.cascade-fast .fx.combo { animation-duration: calc(1s * var(--cascade-time-scale)); }
-.part2.cascade-fast .callout { animation-duration: calc(1.5s * var(--cascade-time-scale)); }
+/* Every cascade is another 1.2× faster. */
+.cascade-fast .board.shake { animation-duration: calc(.3s * var(--cascade-time-scale)); }
+.cascade-fast .tile { transition-duration: calc(.22s * var(--cascade-time-scale)); }
+.cascade-fast .tin.pop { animation-duration: calc(.15s * var(--cascade-time-scale)); }
+.cascade-fast .tin.pop.boom { animation-duration: calc(.28s * var(--cascade-time-scale)); }
+.cascade-fast .tin.pop.zap, .cascade-fast .tin.pop.lava { animation-duration: calc(.3s * var(--cascade-time-scale)); }
+.cascade-fast .tin.pop.line { animation-duration: calc(.22s * var(--cascade-time-scale)); }
+.cascade-fast .tin.pop.sweep { animation-duration: calc(.26s * var(--cascade-time-scale)); }
+.cascade-fast .tin.sp.pop { animation-duration: calc(.25s * var(--cascade-time-scale)); }
+.cascade-fast .particle, .cascade-fast .tin.chomping { animation-duration: calc(.5s * var(--cascade-time-scale)); }
+.cascade-fast .tin.wiggle, .cascade-fast .tin.fresh { animation-duration: calc(.35s * var(--cascade-time-scale)); }
+.cascade-fast .tin.cflash { animation-duration: calc(.6s * var(--cascade-time-scale)); }
+.cascade-fast .wavefx { animation-duration: calc(.55s * var(--cascade-time-scale)); }
+.cascade-fast .fx { animation-duration: calc(.8s * var(--cascade-time-scale)); }
+.cascade-fast .fx.combo { animation-duration: calc(1s * var(--cascade-time-scale)); }
+.cascade-fast .callout { animation-duration: calc(1.5s * var(--cascade-time-scale)); }
