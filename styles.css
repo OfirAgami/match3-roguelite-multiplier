@@ -71,10 +71,10 @@ button.primary {
   position: absolute; top: 12px; right: 14px; font-size: 10px; text-transform: uppercase;
   letter-spacing: .08em; padding: 3px 8px; border-radius: 99px;
 }
-.card-tag.colour { background: #303a2a; color: #a4d47a; }
+.card-tag.scorers { background: #303a2a; color: #a4d47a; }
 .card-tag.legendary { left: 14px; right: auto; background: #3a3320; color: #ffd54a; box-shadow: 0 0 8px rgba(255,213,74,.3); }
-.card-tag.chaos { background: #3a2a2a; color: #ff9a7a; }
-.card-tag.utility { background: #2a323a; color: #7ac0ff; }
+.card-tag.cascaders { background: #3a2a2a; color: #ff9a7a; }
+.card-tag.extenders { background: #2a323a; color: #7ac0ff; }
 
 .build { margin-top: 20px; text-align: center; }
 .build-title { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: #7b8194; margin-bottom: 8px; }

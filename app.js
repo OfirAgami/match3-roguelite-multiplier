@@ -15,7 +15,7 @@ const CONFIG = {
   // Stamped into every telemetry record so balance passes only compare runs
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
-  BALANCE_VERSION: 7, // v7: one move cost, progressive cascades everywhere, shared move bar
+  BALANCE_VERSION: 8, // v8: phase-weighted cascader, scorer, and extender drafts
   VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
@@ -99,8 +99,12 @@ const CONFIG = {
   PINATA_POINTS: 50,               // payout per cracked piñata
   TRIPLE_TILE_MULT: 3,             // whole-move multiplier when triggered
 
-  // Draft weighting
-  SYNERGY_CLUSTER_WEIGHT: 0.6,     // weight += this per already-picked power-up in the same cluster
+  // Draft weighting — only cascaders in rounds 1–3, then phase-specific mixes.
+  CATEGORY_WEIGHTS: {
+    earlyPart1: { cascaders: 1, scorers: 0, extenders: 0 },
+    latePart1:  { cascaders: 0.5, scorers: 0.25, extenders: 0.25 },
+    part2:      { cascaders: 0.25, scorers: 0.5, extenders: 0.25 },
+  },
   BOOST_SAME_COLOUR_CHANCE: 0.6,   // chance a new Colour boost offer re-rolls an existing colour
 
   // Safety / pacing
@@ -220,7 +224,7 @@ function telemetrySummary(includeBot = false, version = null) {
    ========================================================================== */
 const POWERUPS = {
   boost: {
-    id: 'boost', name: 'Colour boost', icon: '🎨', cluster: 'colour', stackable: true,
+    id: 'boost', name: 'Colour boost', icon: '🎨', category: 'scorers', stackable: true,
     roll(g) {
       const owned = Object.keys(g.mods.boosts).map(Number);
       if (owned.length && g.rng() < CONFIG.BOOST_SAME_COLOUR_CHANCE)
@@ -231,20 +235,20 @@ const POWERUPS = {
     mods(m, p) { m.boosts[p.color] = (m.boosts[p.color] || 0) + 1; },
   },
   flood: {
-    id: 'flood', name: 'Flood', icon: '🌊', cluster: 'colour', stackable: true, requiresBoost: true,
+    id: 'flood', name: 'Flood', icon: '🌊', category: 'cascaders', stackable: true, requiresBoost: true,
     disabled: true, // pulled from the draft pool for now (2026-08-13) — effect code kept for re-enable
     desc: () => 'Matching a boosted colour converts 1 adjacent tile to that colour',
     onMatch(g, p, group, api) { if (g.mods.boosts[group.color]) api.flood(group, group.color); },
   },
   spawner: {
-    id: 'spawner', name: 'Special spawner', icon: '✨', cluster: 'colour', stackable: true, requiresBoost: true,
+    id: 'spawner', name: 'Special spawner', icon: '✨', category: 'cascaders', stackable: true, requiresBoost: true,
     desc: () => `Boosted-colour matches: ${Math.round(CONFIG.SPECIAL_SPAWNER_CHANCE * 100)}% chance to spawn a special piece`,
     onMatch(g, p, group, api) {
       if (g.mods.boosts[group.color] && g.rng() < CONFIG.SPECIAL_SPAWNER_CHANCE) api.spawnRandomSpecial(group);
     },
   },
   fillup: {
-    id: 'fillup', name: 'Fill-up', icon: '🔋', cluster: 'colour', stackable: false, requiresBoost: true,
+    id: 'fillup', name: 'Fill-up', icon: '🔋', category: 'scorers', stackable: false, requiresBoost: true,
     desc: () => `Every ${CONFIG.FILL_UP_THRESHOLD} boosted tiles matched: run multiplier +1`,
     mods(m) { m.fillup = true; }, // drives the battery meter in the level UI
     onMatch(g, p, group) {
@@ -257,7 +261,7 @@ const POWERUPS = {
     },
   },
   sweep: {
-    id: 'sweep', name: 'Vertical sweep', icon: '🧹', cluster: 'colour', stackable: false,
+    id: 'sweep', name: 'Vertical sweep', icon: '🧹', category: 'cascaders', stackable: false,
     desc: () => 'Vertical matches you make also clear every tile of that colour',
     // group.active = the match contains a cell the player just swapped.
     // Cascade/auto-explode matches must NOT sweep, or chains snowball into
@@ -267,39 +271,39 @@ const POWERUPS = {
     },
   },
   bombchance: {
-    id: 'bombchance', name: 'Bomb chance', icon: '🎲', cluster: 'chaos', stackable: true,
+    id: 'bombchance', name: 'Bomb chance', icon: '🎲', category: 'cascaders', stackable: true,
     desc: () => `+${Math.round(CONFIG.BOMB_CHANCE_PER_PICK * 100)}% chance each refill tile spawns as a bomb (stacks)`,
     mods(m) { m.bombChance += CONFIG.BOMB_CHANCE_PER_PICK; },
   },
   autoexplode: {
-    id: 'autoexplode', name: 'Auto-explode', icon: '🔥', cluster: 'chaos', stackable: false,
+    id: 'autoexplode', name: 'Auto-explode', icon: '🔥', category: 'cascaders', stackable: false,
     desc: () => 'Every special on the board explodes at the end of each move',
     mods(m) { m.autoExplode = true; },
   },
   countdown: {
-    id: 'countdown', name: 'Countdown', icon: '⏲️', cluster: 'chaos', stackable: false,
+    id: 'countdown', name: 'Countdown', icon: '⏲️', category: 'cascaders', stackable: false,
     desc: () => `Specials get a ${CONFIG.COUNTDOWN_TIMER_START}-move fuse, then explode on their own`,
     mods(m) { m.countdown = true; },
   },
   blast: {
-    id: 'blast', name: 'Blast radius', icon: '💥', cluster: 'chaos', stackable: true,
+    id: 'blast', name: 'Blast radius', icon: '💥', category: 'cascaders', stackable: true,
     desc: () => 'Bomb explosions are one ring bigger (stacks)',
     mods(m) { m.blastBonus += CONFIG.BLAST_RADIUS_BONUS; },
   },
   specialscore: {
-    id: 'specialscore', name: 'Special score', icon: '💎', cluster: 'chaos', stackable: true,
+    id: 'specialscore', name: 'Special score', icon: '💎', category: 'scorers', stackable: true,
     desc: () => 'Special pieces score +1 point when they explode (stacks)',
     mods(m) { m.specialScore += 1; },
   },
   // Like sweep, both line-clears are active-only: cascade matches triggering
   // them causes runaway chains (telemetry showed 120 pts/move at L4).
   rowclear: {
-    id: 'rowclear', name: 'Row clear', icon: '✂️', cluster: 'chaos', stackable: false,
+    id: 'rowclear', name: 'Row clear', icon: '✂️', category: 'cascaders', stackable: false,
     desc: () => 'Horizontal matches you make clear the whole row',
     onMatch(g, p, group, api) { if (group.active) api.clearLines(group, 'h'); },
   },
   colclear: {
-    id: 'colclear', name: 'Column clear', icon: '🪓', cluster: 'chaos', stackable: false,
+    id: 'colclear', name: 'Column clear', icon: '🪓', category: 'cascaders', stackable: false,
     desc: () => 'Vertical matches you make clear the whole column',
     onMatch(g, p, group, api) { if (group.active) api.clearLines(group, 'v'); },
   },
@@ -307,42 +311,42 @@ const POWERUPS = {
   // picks near-unlosable, so it's split per axis. Still cumulative; each pick
   // now grows one dimension instead of two (MAX_BOARD caps the total).
   expandrow: {
-    id: 'expandrow', name: 'Expand rows', icon: '📏', cluster: 'utility', stackable: true,
+    id: 'expandrow', name: 'Expand rows', icon: '📏', category: 'cascaders', stackable: true,
     desc: () => 'Board grows by one row, immediately (stacks)',
     mods(m) { m.expandRows += 1; },
   },
   expandcol: {
-    id: 'expandcol', name: 'Expand columns', icon: '📐', cluster: 'utility', stackable: true,
+    id: 'expandcol', name: 'Expand columns', icon: '📐', category: 'cascaders', stackable: true,
     desc: () => 'Board grows by one column, immediately (stacks)',
     mods(m) { m.expandCols += 1; },
   },
   xtramove: {
-    id: 'xtramove', name: 'Xtra move tiles', icon: '🔄', cluster: 'utility', stackable: true,
+    id: 'xtramove', name: 'Xtra move tiles', icon: '🔄', category: 'extenders', stackable: true,
     desc: () => 'One 🔄 cell is always on the board; matching over it fills the shared 🚀 bar, and a new one pops up elsewhere (stacks: +1 cell each)',
     mods(m) { m.marks += 1; }, // m.marks = how many marks live on the board at once
   },
   square: {
-    id: 'square', name: 'Square match', icon: '🀄', cluster: 'utility', stackable: false,
+    id: 'square', name: 'Square match', icon: '🀄', category: 'cascaders', stackable: false,
     desc: () => '2×2 matches count, and spawn a dynamite that blasts a + shape',
     mods(m) { m.square = true; },
   },
   squarebomb: {
-    id: 'squarebomb', name: 'Square bomb', icon: '💣', cluster: 'utility', stackable: false, requiresSquare: true,
+    id: 'squarebomb', name: 'Square bomb', icon: '💣', category: 'cascaders', stackable: false, requiresSquare: true,
     desc: () => 'Square matches spawn a bomb instead of a dynamite',
     mods(m) { m.squareBomb = true; },
   },
   squarescore: {
-    id: 'squarescore', name: 'Square bonus', icon: '🔷', cluster: 'utility', stackable: false, requiresSquare: true,
+    id: 'squarescore', name: 'Square bonus', icon: '🔷', category: 'scorers', stackable: false, requiresSquare: true,
     desc: () => `Square matches score +${CONFIG.SQUARE_BONUS_POINTS} points`,
     onMatch(g, p, group, api) { if (group.square) api.addBonus(CONFIG.SQUARE_BONUS_POINTS); },
   },
   lifesaver: {
-    id: 'lifesaver', name: 'Lifesaver', icon: '🛟', cluster: 'utility', stackable: false,
+    id: 'lifesaver', name: 'Lifesaver', icon: '🛟', category: 'extenders', stackable: false,
     desc: () => `Once per run: running out of moves grants +${CONFIG.LIFESAVER_BONUS_MOVES} moves instead of losing`,
     mods(m) { m.lifesaver = true; },
   },
   converter: {
-    id: 'converter', name: 'Converter', icon: '🔀', cluster: 'colour', stackable: false, requiresBoost: true,
+    id: 'converter', name: 'Converter', icon: '🔀', category: 'cascaders', stackable: false, requiresBoost: true,
     desc: () => 'Every match converts one random tile to a boosted colour',
     onMatch(g, p, group, api) {
       const owned = Object.keys(g.mods.boosts).map(Number);
@@ -350,27 +354,27 @@ const POWERUPS = {
     },
   },
   spawnweight: {
-    id: 'spawnweight', name: 'Spawn weight', icon: '🧲', cluster: 'colour', stackable: true, requiresBoost: true,
+    id: 'spawnweight', name: 'Spawn weight', icon: '🧲', category: 'cascaders', stackable: true, requiresBoost: true,
     desc: () => 'Boosted colours appear more often in refill tiles (stacks)',
     mods(m) { m.spawnWeight += CONFIG.SPAWN_WEIGHT_PER_PICK; },
   },
   matryoshka: {
-    id: 'matryoshka', name: 'Matryoshka', icon: '🪆', cluster: 'chaos', stackable: false,
+    id: 'matryoshka', name: 'Matryoshka', icon: '🪆', category: 'cascaders', stackable: false,
     desc: () => 'Exploding specials leave the next weaker special behind (⚡→💣→➡️→🧨)',
     mods(m) { m.matryoshka = true; },
   },
   aftershock: {
-    id: 'aftershock', name: 'Aftershock', icon: '💢', cluster: 'chaos', stackable: false,
+    id: 'aftershock', name: 'Aftershock', icon: '💢', category: 'cascaders', stackable: false,
     desc: () => 'Explosions scorch surrounding tiles for one move — matching a scorched tile sets off a small blast',
     mods(m) { m.aftershock = true; },
   },
   tempo: {
-    id: 'tempo', name: 'Tempo', icon: '🎺', cluster: 'utility', stackable: false,
+    id: 'tempo', name: 'Tempo', icon: '🎺', category: 'scorers', stackable: false,
     desc: () => `The first match after each checkpoint scores ×${CONFIG.TEMPO_MULT}`,
     mods(m) { m.tempo = true; },
   },
   snowball: {
-    id: 'snowball', name: 'Snowball', icon: '❄️', cluster: 'utility', stackable: false,
+    id: 'snowball', name: 'Snowball', icon: '❄️', category: 'scorers', stackable: false,
     desc: () => `Making a match gives bonus score, increases by 1 every ${CONFIG.SNOWBALL_MOVES_PER_POINT} moves`,
     // Run-scoped counter that never resets between levels; cascades don't earn
     // the bonus. Nerfed after tester data (v6): stacked per-move growth let a
@@ -380,7 +384,7 @@ const POWERUPS = {
     },
   },
   fusionmove: {
-    id: 'fusionmove', name: 'Fusion energy', icon: '🔗', cluster: 'chaos', stackable: false,
+    id: 'fusionmove', name: 'Fusion energy', icon: '🔗', category: 'extenders', stackable: false,
     desc: () => `Merging two special pieces grants +${CONFIG.MERGE_BONUS_MOVES} move`,
     onMerge(g) {
       g.movesLeft += CONFIG.MERGE_BONUS_MOVES;
@@ -388,7 +392,7 @@ const POWERUPS = {
     },
   },
   momentum: {
-    id: 'momentum', name: 'Momentum', icon: '🚀', cluster: 'utility', stackable: true,
+    id: 'momentum', name: 'Momentum', icon: '🚀', category: 'extenders', stackable: true,
     desc: () => `Every 4+ match you make fills a bar; a full bar pays +1 move (stacks shrink the bar)`,
     // counts once per group even with multiple copies; bar carries across levels
     onMatch(g, p, group, api) {
@@ -398,14 +402,14 @@ const POWERUPS = {
     },
   },
   purge: {
-    id: 'purge', name: 'Colour purge', icon: '🌪️', cluster: 'colour', stackable: false,
+    id: 'purge', name: 'Colour purge', icon: '🌪️', category: 'cascaders', stackable: false,
     desc: () => '4+ matches you make also clear every tile of that colour',
     onMatch(g, p, group, api) {
       if (group.active && group.cells.length >= 4) api.clearColor(group.color, group);
     },
   },
   chomper: {
-    id: 'chomper', name: 'Chomper', icon: '😬', cluster: 'utility', stackable: false,
+    id: 'chomper', name: 'Chomper', icon: '😬', category: 'cascaders', stackable: false,
     // NOTE: its movement direction mirrors the player's last swap — deliberately
     // SECRET. Never surface this in any text, tooltip, or visual indicator.
     desc: () => 'A hungry critter roams the board — after each move you make it eats one piece at full value (specials detonate when eaten)',
@@ -424,32 +428,32 @@ const POWERUPS = {
     },
   },
   conveyor: {
-    id: 'conveyor', name: 'Conveyor belt', icon: '⚙️', cluster: 'utility', stackable: false,
+    id: 'conveyor', name: 'Conveyor belt', icon: '⚙️', category: 'cascaders', stackable: false,
     desc: () => 'After each move, every piece on the board edge rotates one step clockwise — specials and all',
     mods(m) { m.conveyor = true; },
   },
   lava: {
-    id: 'lava', name: 'Floor is lava', icon: '🌋', cluster: 'chaos', stackable: false,
+    id: 'lava', name: 'Floor is lava', icon: '🌋', category: 'cascaders', stackable: false,
     desc: () => 'After each move, the entire bottom row melts away — a board effect, not a match you make',
     mods(m) { m.lava = true; },
   },
   diagswap: {
-    id: 'diagswap', name: 'Diagonal swap', icon: '⤢', cluster: 'utility', stackable: false,
+    id: 'diagswap', name: 'Diagonal swap', icon: '⤢', category: 'cascaders', stackable: false,
     desc: () => 'You can swap diagonally — matches still only form in straight lines',
     mods(m) { m.diagSwap = true; },
   },
   pinata: {
-    id: 'pinata', name: 'Piñata tiles', icon: '🪅', cluster: 'utility', stackable: false,
+    id: 'pinata', name: 'Piñata tiles', icon: '🪅', category: 'scorers', stackable: false,
     desc: () => `Piñatas appear as you play (up to ${CONFIG.DRIP.pinata.cap}); ${CONFIG.PINATA_HITS} matches over one pays +${CONFIG.PINATA_POINTS} points (cascades count)`,
     mods(m) { m.pinataDrip = true; },
   },
   tripletile: {
-    id: 'tripletile', name: 'Triple tile', icon: '3️⃣', cluster: 'utility', stackable: false,
+    id: 'tripletile', name: 'Triple tile', icon: '3️⃣', category: 'scorers', stackable: false,
     desc: () => `A marked tile appears as you play; matching over it makes the whole move score ×${CONFIG.TRIPLE_TILE_MULT} (then a new one drips in later)`,
     mods(m) { m.tripleDrip = true; },
   },
   chests: {
-    id: 'chests', name: 'Treasure chests', icon: '🎁', cluster: 'utility', stackable: false,
+    id: 'chests', name: 'Treasure chests', icon: '🎁', category: 'extenders', stackable: false,
     desc: () => `Chests drop in from the top as you play — at the bottom they pay +${CONFIG.CHEST_POINTS} points, or +${CONFIG.CHEST_MOVES} moves when you're low`,
     mods(m) { m.chestDrip = true; },
   },
@@ -577,16 +581,24 @@ class Game {
     this.render();
   }
 
-  draftWeight(def) {
-    let w = 1;
-    const inCluster = this.run.picks.filter(p => POWERUPS[p.id].cluster === def.cluster).length;
-    w *= 1 + CONFIG.SYNERGY_CLUSTER_WEIGHT * inCluster;
-    if (def.tier === 3) w *= CONFIG.LEGENDARY_WEIGHT; // legendaries stay rare even when unlocked
-    return w;
+  categoryWeights(replacement = false) {
+    if (replacement) return CONFIG.CATEGORY_WEIGHTS.part2;
+    return this.run.level <= 3
+      ? CONFIG.CATEGORY_WEIGHTS.earlyPart1
+      : CONFIG.CATEGORY_WEIGHTS.latePart1;
+  }
+
+  draftWeight(def, pool, categoryWeights) {
+    const rarity = d => d.tier === 3 ? CONFIG.LEGENDARY_WEIGHT : 1;
+    const categoryTotal = pool
+      .filter(d => d.category === def.category)
+      .reduce((total, d) => total + rarity(d), 0);
+    return categoryWeights[def.category] * rarity(def) / categoryTotal;
   }
 
   makeOffers(replacement = false) {
     const n = replacement ? 3 : Math.max(2, Math.min(3, this.opts.draftOptions | 0));
+    const categoryWeights = this.categoryWeights(replacement);
     const hasBoost = Object.keys(this.mods.boosts).length > 0;
     const equipped = new Set(this.run.picks.map(p => p.id));
     const tierOk = d =>
@@ -595,6 +607,7 @@ class Game {
       (d.tier === 3 && this.run.level >= CONFIG.LEGENDARY_FROM_LEVEL);
     const pool = POWERUP_LIST.filter(d =>
       !d.disabled &&
+      categoryWeights[d.category] > 0 &&
       (!d.requiresBoost || hasBoost) && // boost-dependent picks never appear without a Colour boost
       (!d.requiresSquare || this.mods.square) && // square upgrades need Square match drafted
       tierOk(d) &&
@@ -603,7 +616,7 @@ class Game {
         : d.stackable || !equipped.has(d.id)));
     const offers = [];
     while (offers.length < n && pool.length) {
-      const weights = pool.map(d => this.draftWeight(d));
+      const weights = pool.map(d => this.draftWeight(d, pool, categoryWeights));
       const total = weights.reduce((a, b) => a + b, 0);
       let x = this.rng() * total, idx = 0;
       while (idx < pool.length - 1 && x > weights[idx]) { x -= weights[idx]; idx++; }
@@ -1932,7 +1945,7 @@ function DraftScreen({ G }) {
           <div className="card-icon">${def.icon}${o.color !== undefined ? h`<${ColorDot} color=${o.color} />` : null}</div>
           <div className="card-name">${def.name}${o.color !== undefined ? ` — ${COLOR_NAMES[o.color]}` : ''}</div>
           <div className="card-desc">${def.desc(o)}</div>
-          <div className=${'card-tag ' + def.cluster}>${def.cluster}</div>
+          <div className=${'card-tag ' + def.category}>${def.category}</div>
           ${def.tier === 3 ? h`<div className="card-tag legendary">⭐ legendary</div>` : null}
         </button>`;
       })}
@@ -2181,7 +2194,7 @@ function InlineDraft({ G }) {
           <div className="card-icon">${def.icon}${o.color !== undefined ? h`<${ColorDot} color=${o.color} />` : null}</div>
           <div className="card-name">${def.name}${o.color !== undefined ? ` — ${COLOR_NAMES[o.color]}` : ''}</div>
           <div className="card-desc">${def.desc(o)}</div>
-          <div className=${'card-tag ' + def.cluster}>${def.cluster}</div>
+          <div className=${'card-tag ' + def.category}>${def.category}</div>
           ${def.tier === 3 ? h`<div className="card-tag legendary">⭐ legendary</div>` : null}
         </button>`;
       })}
