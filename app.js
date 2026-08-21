@@ -2,8 +2,8 @@
    Match-3 Roguelite — PERSISTENT BOARD variant (fork of react-roguelite).
    One board for the whole run, one run-long progress bar with cumulative
    score checkpoints. Crossing a checkpoint grants moves + a power-up draft.
-   After the final checkpoint, growing endless rounds rotate one equipped
-   power-up at a time. No discrete levels, no board regeneration.
+   After the final checkpoint, growing endless rounds let players trade
+   equipped power-ups for score multiplier. No discrete levels, no board regeneration.
 
    All balance knobs live in CONFIG below. Power-ups are self-contained
    objects in POWERUPS that hook into game events (mods fold, onMatch,
@@ -15,7 +15,7 @@ const CONFIG = {
   // Stamped into every telemetry record so balance passes only compare runs
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
-  BALANCE_VERSION: 8, // v8: phase-weighted cascader, scorer, and extender drafts
+  BALANCE_VERSION: 9, // v9: optional Part 2 discards double score multiplier
   VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
@@ -31,8 +31,8 @@ const CONFIG = {
   // (med. 9-16 moves used) and the middle checkpoints rose ~10%.
   CHECKPOINTS: [80, 250, 520, 900, 1500, 2500],
   CHECKPOINT_DIFFICULTY: [0.5, 0.6, 0.7, 0.8, 0.9, 1],
-  ENDLESS_SCORE_GROWTH: 1.25,
-  PART_2_TARGET_SCALE: 0.75,
+  ENDLESS_SCORE_GROWTH: 3,
+  PART_2_TARGET_SCALE: 0.25,
   PART_2_ROUND_MOVES: 12,
   CASCADE_SPEED_STEP: 1.2,
   START_MOVES: 10,                 // opening move pool (base L1 budget)
@@ -99,11 +99,11 @@ const CONFIG = {
   PINATA_POINTS: 50,               // payout per cracked piñata
   TRIPLE_TILE_MULT: 3,             // whole-move multiplier when triggered
 
-  // Draft weighting — only cascaders in rounds 1–3, then phase-specific mixes.
+  // Draft weighting — only Cascade in rounds 1–3, then phase-specific mixes.
   CATEGORY_WEIGHTS: {
-    earlyPart1: { cascaders: 1, scorers: 0, extenders: 0 },
-    latePart1:  { cascaders: 0.5, scorers: 0.25, extenders: 0.25 },
-    part2:      { cascaders: 0.25, scorers: 0.5, extenders: 0.25 },
+    earlyPart1: { cascade: 1, score: 0, extend: 0 },
+    latePart1:  { cascade: 0.5, score: 0.25, extend: 0.25 },
+    part2:      { cascade: 0.25, score: 0.5, extend: 0.25 },
   },
   BOOST_SAME_COLOUR_CHANCE: 0.6,   // chance a new Colour boost offer re-rolls an existing colour
 
@@ -123,6 +123,7 @@ const CONFIG = {
 };
 
 const COLOR_NAMES = ['Red', 'Amber', 'Green', 'Blue', 'Purple', 'Orange'];
+const CATEGORY_ICONS = { cascade: '🔥', score: '💲', extend: '💊' };
 const SPECIAL_EMOJI = { bomb: '💣', arrow: '➡️', lightning: '⚡', dynamite: '🧨', cross: '✚' };
 // Matryoshka decay chain: an exploding special leaves the next weaker one behind.
 const MATRYOSHKA_NEXT = { lightning: 'bomb', cross: 'bomb', bomb: 'arrow', arrow: 'dynamite', dynamite: null };
@@ -224,7 +225,7 @@ function telemetrySummary(includeBot = false, version = null) {
    ========================================================================== */
 const POWERUPS = {
   boost: {
-    id: 'boost', name: 'Colour boost', icon: '🎨', category: 'scorers', stackable: true,
+    id: 'boost', name: 'Colour boost', icon: '🎨', category: 'score', stackable: true,
     roll(g) {
       const owned = Object.keys(g.mods.boosts).map(Number);
       if (owned.length && g.rng() < CONFIG.BOOST_SAME_COLOUR_CHANCE)
@@ -235,33 +236,33 @@ const POWERUPS = {
     mods(m, p) { m.boosts[p.color] = (m.boosts[p.color] || 0) + 1; },
   },
   flood: {
-    id: 'flood', name: 'Flood', icon: '🌊', category: 'cascaders', stackable: true, requiresBoost: true,
+    id: 'flood', name: 'Flood', icon: '🌊', category: 'cascade', stackable: true, requiresBoost: true,
     disabled: true, // pulled from the draft pool for now (2026-08-13) — effect code kept for re-enable
     desc: () => 'Matching a boosted colour converts 1 adjacent tile to that colour',
     onMatch(g, p, group, api) { if (g.mods.boosts[group.color]) api.flood(group, group.color); },
   },
   spawner: {
-    id: 'spawner', name: 'Special spawner', icon: '✨', category: 'cascaders', stackable: true, requiresBoost: true,
+    id: 'spawner', name: 'Special spawner', icon: '✨', category: 'cascade', stackable: true, requiresBoost: true,
     desc: () => `Boosted-colour matches: ${Math.round(CONFIG.SPECIAL_SPAWNER_CHANCE * 100)}% chance to spawn a special piece`,
     onMatch(g, p, group, api) {
       if (g.mods.boosts[group.color] && g.rng() < CONFIG.SPECIAL_SPAWNER_CHANCE) api.spawnRandomSpecial(group);
     },
   },
   fillup: {
-    id: 'fillup', name: 'Fill-up', icon: '🔋', category: 'scorers', stackable: false, requiresBoost: true,
-    desc: () => `Every ${CONFIG.FILL_UP_THRESHOLD} boosted tiles matched: run multiplier +1`,
+    id: 'fillup', name: 'Fill-up', icon: '🔋', category: 'score', stackable: false, requiresBoost: true,
+    desc: () => `Every ${CONFIG.FILL_UP_THRESHOLD} boosted tiles matched: score multiplier +1`,
     mods(m) { m.fillup = true; }, // drives the battery meter in the level UI
     onMatch(g, p, group) {
       if (!g.mods.boosts[group.color]) return;
       g.run.fillCount += group.cells.length;
       while (g.run.fillCount >= CONFIG.FILL_UP_THRESHOLD * (g.run.fillTriggers + 1)) {
         g.run.fillTriggers++; g.run.multiplier++;
-        g.callout(`🔋 Multiplier ×${g.run.multiplier}!`);
+        g.callout(`🔋 Score multiplier ×${g.run.multiplier}!`);
       }
     },
   },
   sweep: {
-    id: 'sweep', name: 'Vertical sweep', icon: '🧹', category: 'cascaders', stackable: false,
+    id: 'sweep', name: 'Vertical sweep', icon: '🧹', category: 'cascade', stackable: false,
     desc: () => 'Vertical matches you make also clear every tile of that colour',
     // group.active = the match contains a cell the player just swapped.
     // Cascade/auto-explode matches must NOT sweep, or chains snowball into
@@ -271,39 +272,39 @@ const POWERUPS = {
     },
   },
   bombchance: {
-    id: 'bombchance', name: 'Bomb chance', icon: '🎲', category: 'cascaders', stackable: true,
+    id: 'bombchance', name: 'Bomb chance', icon: '🎲', category: 'cascade', stackable: true,
     desc: () => `+${Math.round(CONFIG.BOMB_CHANCE_PER_PICK * 100)}% chance each refill tile spawns as a bomb (stacks)`,
     mods(m) { m.bombChance += CONFIG.BOMB_CHANCE_PER_PICK; },
   },
   autoexplode: {
-    id: 'autoexplode', name: 'Auto-explode', icon: '🔥', category: 'cascaders', stackable: false,
+    id: 'autoexplode', name: 'Auto-explode', icon: '🔥', category: 'cascade', stackable: false,
     desc: () => 'Every special on the board explodes at the end of each move',
     mods(m) { m.autoExplode = true; },
   },
   countdown: {
-    id: 'countdown', name: 'Countdown', icon: '⏲️', category: 'cascaders', stackable: false,
+    id: 'countdown', name: 'Countdown', icon: '⏲️', category: 'cascade', stackable: false,
     desc: () => `Specials get a ${CONFIG.COUNTDOWN_TIMER_START}-move fuse, then explode on their own`,
     mods(m) { m.countdown = true; },
   },
   blast: {
-    id: 'blast', name: 'Blast radius', icon: '💥', category: 'cascaders', stackable: true,
+    id: 'blast', name: 'Blast radius', icon: '💥', category: 'cascade', stackable: true,
     desc: () => 'Bomb explosions are one ring bigger (stacks)',
     mods(m) { m.blastBonus += CONFIG.BLAST_RADIUS_BONUS; },
   },
   specialscore: {
-    id: 'specialscore', name: 'Special score', icon: '💎', category: 'scorers', stackable: true,
+    id: 'specialscore', name: 'Special score', icon: '💎', category: 'score', stackable: true,
     desc: () => 'Special pieces score +1 point when they explode (stacks)',
     mods(m) { m.specialScore += 1; },
   },
   // Like sweep, both line-clears are active-only: cascade matches triggering
   // them causes runaway chains (telemetry showed 120 pts/move at L4).
   rowclear: {
-    id: 'rowclear', name: 'Row clear', icon: '✂️', category: 'cascaders', stackable: false,
+    id: 'rowclear', name: 'Row clear', icon: '✂️', category: 'cascade', stackable: false,
     desc: () => 'Horizontal matches you make clear the whole row',
     onMatch(g, p, group, api) { if (group.active) api.clearLines(group, 'h'); },
   },
   colclear: {
-    id: 'colclear', name: 'Column clear', icon: '🪓', category: 'cascaders', stackable: false,
+    id: 'colclear', name: 'Column clear', icon: '🪓', category: 'cascade', stackable: false,
     desc: () => 'Vertical matches you make clear the whole column',
     onMatch(g, p, group, api) { if (group.active) api.clearLines(group, 'v'); },
   },
@@ -311,42 +312,42 @@ const POWERUPS = {
   // picks near-unlosable, so it's split per axis. Still cumulative; each pick
   // now grows one dimension instead of two (MAX_BOARD caps the total).
   expandrow: {
-    id: 'expandrow', name: 'Expand rows', icon: '📏', category: 'cascaders', stackable: true,
+    id: 'expandrow', name: 'Expand rows', icon: '📏', category: 'cascade', stackable: true,
     desc: () => 'Board grows by one row, immediately (stacks)',
     mods(m) { m.expandRows += 1; },
   },
   expandcol: {
-    id: 'expandcol', name: 'Expand columns', icon: '📐', category: 'cascaders', stackable: true,
+    id: 'expandcol', name: 'Expand columns', icon: '📐', category: 'cascade', stackable: true,
     desc: () => 'Board grows by one column, immediately (stacks)',
     mods(m) { m.expandCols += 1; },
   },
   xtramove: {
-    id: 'xtramove', name: 'Xtra move tiles', icon: '🔄', category: 'extenders', stackable: true,
+    id: 'xtramove', name: 'Xtra move tiles', icon: '🔄', category: 'extend', stackable: true,
     desc: () => 'One 🔄 cell is always on the board; matching over it fills the shared 🚀 bar, and a new one pops up elsewhere (stacks: +1 cell each)',
     mods(m) { m.marks += 1; }, // m.marks = how many marks live on the board at once
   },
   square: {
-    id: 'square', name: 'Square match', icon: '🀄', category: 'cascaders', stackable: false,
+    id: 'square', name: 'Square match', icon: '🀄', category: 'cascade', stackable: false,
     desc: () => '2×2 matches count, and spawn a dynamite that blasts a + shape',
     mods(m) { m.square = true; },
   },
   squarebomb: {
-    id: 'squarebomb', name: 'Square bomb', icon: '💣', category: 'cascaders', stackable: false, requiresSquare: true,
+    id: 'squarebomb', name: 'Square bomb', icon: '💣', category: 'cascade', stackable: false, requiresSquare: true,
     desc: () => 'Square matches spawn a bomb instead of a dynamite',
     mods(m) { m.squareBomb = true; },
   },
   squarescore: {
-    id: 'squarescore', name: 'Square bonus', icon: '🔷', category: 'scorers', stackable: false, requiresSquare: true,
+    id: 'squarescore', name: 'Square bonus', icon: '🔷', category: 'score', stackable: false, requiresSquare: true,
     desc: () => `Square matches score +${CONFIG.SQUARE_BONUS_POINTS} points`,
     onMatch(g, p, group, api) { if (group.square) api.addBonus(CONFIG.SQUARE_BONUS_POINTS); },
   },
   lifesaver: {
-    id: 'lifesaver', name: 'Lifesaver', icon: '🛟', category: 'extenders', stackable: false,
+    id: 'lifesaver', name: 'Lifesaver', icon: '🛟', category: 'extend', stackable: false,
     desc: () => `Once per run: running out of moves grants +${CONFIG.LIFESAVER_BONUS_MOVES} moves instead of losing`,
     mods(m) { m.lifesaver = true; },
   },
   converter: {
-    id: 'converter', name: 'Converter', icon: '🔀', category: 'cascaders', stackable: false, requiresBoost: true,
+    id: 'converter', name: 'Converter', icon: '🔀', category: 'cascade', stackable: false, requiresBoost: true,
     desc: () => 'Every match converts one random tile to a boosted colour',
     onMatch(g, p, group, api) {
       const owned = Object.keys(g.mods.boosts).map(Number);
@@ -354,27 +355,27 @@ const POWERUPS = {
     },
   },
   spawnweight: {
-    id: 'spawnweight', name: 'Spawn weight', icon: '🧲', category: 'cascaders', stackable: true, requiresBoost: true,
+    id: 'spawnweight', name: 'Spawn weight', icon: '🧲', category: 'cascade', stackable: true, requiresBoost: true,
     desc: () => 'Boosted colours appear more often in refill tiles (stacks)',
     mods(m) { m.spawnWeight += CONFIG.SPAWN_WEIGHT_PER_PICK; },
   },
   matryoshka: {
-    id: 'matryoshka', name: 'Matryoshka', icon: '🪆', category: 'cascaders', stackable: false,
+    id: 'matryoshka', name: 'Matryoshka', icon: '🪆', category: 'cascade', stackable: false,
     desc: () => 'Exploding specials leave the next weaker special behind (⚡→💣→➡️→🧨)',
     mods(m) { m.matryoshka = true; },
   },
   aftershock: {
-    id: 'aftershock', name: 'Aftershock', icon: '💢', category: 'cascaders', stackable: false,
+    id: 'aftershock', name: 'Aftershock', icon: '💢', category: 'cascade', stackable: false,
     desc: () => 'Explosions scorch surrounding tiles for one move — matching a scorched tile sets off a small blast',
     mods(m) { m.aftershock = true; },
   },
   tempo: {
-    id: 'tempo', name: 'Tempo', icon: '🎺', category: 'scorers', stackable: false,
+    id: 'tempo', name: 'Tempo', icon: '🎺', category: 'score', stackable: false,
     desc: () => `The first match after each checkpoint scores ×${CONFIG.TEMPO_MULT}`,
     mods(m) { m.tempo = true; },
   },
   snowball: {
-    id: 'snowball', name: 'Snowball', icon: '❄️', category: 'scorers', stackable: false,
+    id: 'snowball', name: 'Snowball', icon: '❄️', category: 'score', stackable: false,
     desc: () => `Making a match gives bonus score, increases by 1 every ${CONFIG.SNOWBALL_MOVES_PER_POINT} moves`,
     // Run-scoped counter that never resets between levels; cascades don't earn
     // the bonus. Nerfed after tester data (v6): stacked per-move growth let a
@@ -384,7 +385,7 @@ const POWERUPS = {
     },
   },
   fusionmove: {
-    id: 'fusionmove', name: 'Fusion energy', icon: '🔗', category: 'extenders', stackable: false,
+    id: 'fusionmove', name: 'Fusion energy', icon: '🔗', category: 'extend', stackable: false,
     desc: () => `Merging two special pieces grants +${CONFIG.MERGE_BONUS_MOVES} move`,
     onMerge(g) {
       g.movesLeft += CONFIG.MERGE_BONUS_MOVES;
@@ -392,7 +393,7 @@ const POWERUPS = {
     },
   },
   momentum: {
-    id: 'momentum', name: 'Momentum', icon: '🚀', category: 'extenders', stackable: true,
+    id: 'momentum', name: 'Momentum', icon: '🚀', category: 'extend', stackable: true,
     desc: () => `Every 4+ match you make fills a bar; a full bar pays +1 move (stacks shrink the bar)`,
     // counts once per group even with multiple copies; bar carries across levels
     onMatch(g, p, group, api) {
@@ -402,14 +403,14 @@ const POWERUPS = {
     },
   },
   purge: {
-    id: 'purge', name: 'Colour purge', icon: '🌪️', category: 'cascaders', stackable: false,
+    id: 'purge', name: 'Colour purge', icon: '🌪️', category: 'cascade', stackable: false,
     desc: () => '4+ matches you make also clear every tile of that colour',
     onMatch(g, p, group, api) {
       if (group.active && group.cells.length >= 4) api.clearColor(group.color, group);
     },
   },
   chomper: {
-    id: 'chomper', name: 'Chomper', icon: '😬', category: 'cascaders', stackable: false,
+    id: 'chomper', name: 'Chomper', icon: '😬', category: 'cascade', stackable: false,
     // NOTE: its movement direction mirrors the player's last swap — deliberately
     // SECRET. Never surface this in any text, tooltip, or visual indicator.
     desc: () => 'A hungry critter roams the board — after each move you make it eats one piece at full value (specials detonate when eaten)',
@@ -428,32 +429,32 @@ const POWERUPS = {
     },
   },
   conveyor: {
-    id: 'conveyor', name: 'Conveyor belt', icon: '⚙️', category: 'cascaders', stackable: false,
+    id: 'conveyor', name: 'Conveyor belt', icon: '⚙️', category: 'cascade', stackable: false,
     desc: () => 'After each move, every piece on the board edge rotates one step clockwise — specials and all',
     mods(m) { m.conveyor = true; },
   },
   lava: {
-    id: 'lava', name: 'Floor is lava', icon: '🌋', category: 'cascaders', stackable: false,
+    id: 'lava', name: 'Floor is lava', icon: '🌋', category: 'cascade', stackable: false,
     desc: () => 'After each move, the entire bottom row melts away — a board effect, not a match you make',
     mods(m) { m.lava = true; },
   },
   diagswap: {
-    id: 'diagswap', name: 'Diagonal swap', icon: '⤢', category: 'cascaders', stackable: false,
+    id: 'diagswap', name: 'Diagonal swap', icon: '⤢', category: 'cascade', stackable: false,
     desc: () => 'You can swap diagonally — matches still only form in straight lines',
     mods(m) { m.diagSwap = true; },
   },
   pinata: {
-    id: 'pinata', name: 'Piñata tiles', icon: '🪅', category: 'scorers', stackable: false,
+    id: 'pinata', name: 'Piñata tiles', icon: '🪅', category: 'score', stackable: false,
     desc: () => `Piñatas appear as you play (up to ${CONFIG.DRIP.pinata.cap}); ${CONFIG.PINATA_HITS} matches over one pays +${CONFIG.PINATA_POINTS} points (cascades count)`,
     mods(m) { m.pinataDrip = true; },
   },
   tripletile: {
-    id: 'tripletile', name: 'Triple tile', icon: '3️⃣', category: 'scorers', stackable: false,
+    id: 'tripletile', name: 'Triple tile', icon: '3️⃣', category: 'score', stackable: false,
     desc: () => `A marked tile appears as you play; matching over it makes the whole move score ×${CONFIG.TRIPLE_TILE_MULT} (then a new one drips in later)`,
     mods(m) { m.tripleDrip = true; },
   },
   chests: {
-    id: 'chests', name: 'Treasure chests', icon: '🎁', category: 'extenders', stackable: false,
+    id: 'chests', name: 'Treasure chests', icon: '🎁', category: 'extend', stackable: false,
     desc: () => `Chests drop in from the top as you play — at the bottom they pay +${CONFIG.CHEST_POINTS} points, or +${CONFIG.CHEST_MOVES} moves when you're low`,
     mods(m) { m.chestDrip = true; },
   },
@@ -522,7 +523,7 @@ class Game {
      newRun → draft 1 → startRun (the ONE board generation of the run) →
      play until score crosses a checkpoint → checkpoint overlay → draft →
      resume the SAME board. The final checkpoint and every endless round use
-     discard → replacement instead of adding another power-up.
+     optional discard trade → one new power-up draw.
      The run ends only when moves hit 0 (win if the final flag was reached). */
   newRun(seed) {
     this.seed = (seed >>> 0) || 1;
@@ -533,6 +534,8 @@ class Game {
                  fillCount: 0, fillTriggers: 0, multiplier: 1, lifesaverUsed: false,
                  checkpointIdx: 0, finalReached: false, pendingRewards: [], segmentsLogged: 0,
                  endlessRound: 0, endlessDelta: 0, endlessTarget: null };
+    this.discardedIds = new Set();
+    this.discardedKeys = [];
     this.board = null;
     this.score = 0;
     this.busy = false;
@@ -612,7 +615,7 @@ class Game {
       (!d.requiresSquare || this.mods.square) && // square upgrades need Square match drafted
       tierOk(d) &&
       (replacement
-        ? !equipped.has(d.id) && d.id !== this.discardedId
+        ? !equipped.has(d.id) && !this.discardedIds.has(d.id)
         : d.stackable || !equipped.has(d.id)));
     const offers = [];
     while (offers.length < n && pool.length) {
@@ -634,7 +637,7 @@ class Game {
     const history = { offered: this.offers.map(key), picked: key(this.offers[i]) };
     if (this.replacing) {
       history.discardOffered = this.discardChoices;
-      history.discarded = this.discardedKey;
+      history.discarded = this.discardedKeys;
       history.endlessRound = this.run.endlessRound + 1;
     }
     this.run.draftHistory.push(history);
@@ -648,8 +651,8 @@ class Game {
     const def = POWERUPS[pick.id];
     if (def.onRunStart) def.onRunStart(this, pick); // e.g. chomper hatches now
     this.replacing = false;
-    this.discardedId = null;
-    this.discardedKey = null;
+    this.discardedIds = new Set();
+    this.discardedKeys = [];
     this.discardChoices = null;
     this.finishReward();
   }
@@ -661,26 +664,34 @@ class Game {
       if (byKey.has(key)) byKey.get(key).count++;
       else byKey.set(key, { key, pick, count: 1 });
     }
-    const pool = [...byKey.values()];
-    this.discardOffers = [];
-    while (this.discardOffers.length < 3 && pool.length) {
-      this.discardOffers.push(pool.splice(Math.floor(this.rng() * pool.length), 1)[0]);
-    }
+    this.discardOffers = [...byKey.values()];
+    this.discardSelected = new Set();
     this.phase = 'discard';
     this.render();
   }
 
-  discardOffer(i) {
+  toggleDiscard(i) {
     if (this.phase !== 'discard' || !this.discardOffers[i]) return;
-    const choice = this.discardOffers[i];
-    const at = this.run.picks.findIndex(p =>
-      p.id === choice.pick.id && p.color === choice.pick.color);
-    this.run.picks.splice(at, 1);
+    const key = this.discardOffers[i].key;
+    if (this.discardSelected.has(key)) this.discardSelected.delete(key);
+    else this.discardSelected.add(key);
+    this.render();
+  }
+
+  proceedDiscard() {
+    if (this.phase !== 'discard') return;
+    const choices = this.discardOffers.filter(o => this.discardSelected.has(o.key));
     this.discardChoices = this.discardOffers.map(o => o.key);
-    this.discardedId = choice.pick.id;
-    this.discardedKey = choice.key;
+    this.discardedIds = new Set(choices.map(o => o.pick.id));
+    this.discardedKeys = choices.map(o => o.key);
+    for (const choice of choices) {
+      const at = this.run.picks.findIndex(p =>
+        p.id === choice.pick.id && p.color === choice.pick.color);
+      this.run.picks.splice(at, 1);
+    }
+    this.run.multiplier *= 2 ** choices.length;
     this.computeMods();
-    this.cleanupDiscard(choice.pick.id);
+    for (const id of this.discardedIds) this.cleanupDiscard(id);
     this.startDraft(true);
   }
 
@@ -1332,8 +1343,9 @@ class Game {
         const [pr, pc] = k.split(',').map(Number);
         if (left <= 0) {
           this.pinatas.delete(k);
-          this.score += CONFIG.PINATA_POINTS;
-          this.addFx(pr, pc, `🪅 +${CONFIG.PINATA_POINTS}`, 'big');
+          const pts = CONFIG.PINATA_POINTS * this.run.multiplier;
+          this.score += pts;
+          this.addFx(pr, pc, `🪅 +${pts}`, 'big');
         } else {
           this.pinatas.set(k, left);
           this.addFx(pr, pc, '🪅', 'emoji');
@@ -1499,8 +1511,9 @@ class Game {
           this.movesLeft += CONFIG.CHEST_MOVES;
           this.addFx(this.rows - 1, c, `🎁 +${CONFIG.CHEST_MOVES} moves`, 'big');
         } else {
-          this.score += CONFIG.CHEST_POINTS;
-          this.addFx(this.rows - 1, c, `🎁 +${CONFIG.CHEST_POINTS}`, 'big');
+          const pts = CONFIG.CHEST_POINTS * this.run.multiplier;
+          this.score += pts;
+          this.addFx(this.rows - 1, c, `🎁 +${pts}`, 'big');
         }
       }
     }
@@ -1941,11 +1954,11 @@ function DraftScreen({ G }) {
     <div className="cards">
       ${G.offers.map((o, i) => {
         const def = POWERUPS[o.id];
-        return h`<button className="card" key=${i} onClick=${() => G.pickOffer(i)}>
+        return h`<button className=${'card ' + def.category} key=${i} onClick=${() => G.pickOffer(i)}>
           <div className="card-icon">${def.icon}${o.color !== undefined ? h`<${ColorDot} color=${o.color} />` : null}</div>
           <div className="card-name">${def.name}${o.color !== undefined ? ` — ${COLOR_NAMES[o.color]}` : ''}</div>
           <div className="card-desc">${def.desc(o)}</div>
-          <div className=${'card-tag ' + def.category}>${def.category}</div>
+          <div className=${'card-tag category-tag ' + def.category}>${CATEGORY_ICONS[def.category]}</div>
           ${def.tier === 3 ? h`<div className="card-tag legendary">⭐ legendary</div>` : null}
         </button>`;
       })}
@@ -2093,7 +2106,7 @@ function FillupMeter({ G }) {
   if (!G.mods.fillup) return null;
   const progress = G.run.fillCount - CONFIG.FILL_UP_THRESHOLD * G.run.fillTriggers;
   const pct = Math.min(100, Math.round((progress / CONFIG.FILL_UP_THRESHOLD) * 100));
-  return h`<div className="fillmeter" title="Fill-up: boosted tiles matched toward the next multiplier">
+  return h`<div className="fillmeter" title="Fill-up: boosted tiles matched toward the next score multiplier">
     <span className="fill-icon">🔋</span>
     <div className="fill-bar"><div className="fill-fill" style=${{ width: pct + '%' }}></div></div>
     <span className="fill-nums">${progress}/${CONFIG.FILL_UP_THRESHOLD}</span>
@@ -2130,7 +2143,10 @@ function LevelScreen({ G }) {
   return h`<div className=${'screen level-screen' + (endless ? ' part2' : '') + (G.cascadeSpeed > 1 ? ' cascade-fast' : '')}
     style=${{ '--cascade-time-scale': 1 / G.cascadeSpeed }}>
     <div className="hud">
-      <div className="hud-lv">${endless ? `🔥 Round ${G.run.endlessRound + 1}` : `🚩 ${G.run.checkpointIdx}/${cps.length}`}</div>
+      <div className="hud-lv">
+        ${endless ? `🔥 Round ${G.run.endlessRound + 1}` : `🚩 ${G.run.checkpointIdx}/${cps.length}`}
+        ${endless ? h`<span className="hud-mult">SCORE ×${G.run.multiplier}</span>` : null}
+      </div>
       <div className="hud-score">
         <div className="bar runbar">
           <div className="fill" style=${{ width: pct + '%' }}></div>
@@ -2138,7 +2154,7 @@ function LevelScreen({ G }) {
             className=${'cp-tick' + (G.score >= v ? ' done' : '')}
             style=${{ left: ((i + 1) / n) * 100 + '%' }}></div>`)}
         </div>
-        <div className="nums">${G.score} / ${next}${G.run.multiplier > 1 ? h`<span className="mult"> ×${G.run.multiplier}</span>` : null}</div>
+        <div className="nums">${G.score} / ${next}${!endless && G.run.multiplier > 1 ? h`<span className="mult"> ×${G.run.multiplier}</span>` : null}</div>
       </div>
       <div className=${'hud-moves' + (G.movesLeft <= 3 ? ' low' : '')}>
         <span>👟 ${G.movesLeft}</span>
@@ -2157,28 +2173,34 @@ function LevelScreen({ G }) {
           ? `🔥 Endless Round ${cp.round} complete`
           : cp.finalFlag ? '🏁 Final checkpoint' : `🚩 Checkpoint ${cp.n}`}${cp.crossed > 1 ? ` (×${cp.crossed} in one move!)` : ''}</h2>
         <p>+${cp.moves} moves${cp.finalFlag ? ' — Part 2 begins' : ''}</p>
-        <button className="primary" onClick=${() => G.continueRun()}>${reward === 'rotate' ? 'Choose a power-up to discard' : 'Draft a power-up'}</button>
+        <button className="primary" onClick=${() => G.continueRun()}>${reward === 'rotate' ? 'Discard for multiplier' : 'Draft a power-up'}</button>
       </div>
     </div>` : null}
-    ${G.phase === 'discard' ? h`<${InlineDiscard} G=${G} />` : null}
+    ${G.phase === 'discard' ? h`<div className="overlay discard-overlay"><${InlineDiscard} G=${G} /></div>` : null}
     ${G.phase === 'draft' ? h`<${InlineDraft} G=${G} />` : null}
   </div>`;
 }
 
 function InlineDiscard({ G }) {
-  return h`<div className="draft-inline discard-inline">
-    <div className="draft-inline-title">✕ DISCARD ONE POWER-UP</div>
+  const previewMultiplier = G.run.multiplier * 2 ** G.discardSelected.size;
+  return h`<div className="discard-panel">
+    <div className="discard-heading">SCORE MULTIPLIER</div>
+    <div className="discard-multiplier">×${previewMultiplier}</div>
+    <div className="discard-target">Next target score: <b>${G.run.endlessTarget}</b></div>
+    <div className="discard-rule">Each selected power-up loses one copy and doubles your score multiplier. You may skip or select as many as you want.</div>
     <div className="cards">
       ${G.discardOffers.map((o, i) => {
         const pick = o.pick, def = POWERUPS[pick.id];
-        return h`<button className="card" key=${o.key} onClick=${() => G.discardOffer(i)}>
+        const selected = G.discardSelected.has(o.key);
+        return h`<div className=${'card ' + def.category + (selected ? ' selected' : '')} key=${o.key}>
           <div className="card-icon">${def.icon}${pick.color !== undefined ? h`<${ColorDot} color=${pick.color} />` : null}${o.count > 1 ? h`<b>×${o.count}</b>` : null}</div>
           <div className="card-name">${def.name}${pick.color !== undefined ? ` — ${COLOR_NAMES[pick.color]}` : ''}</div>
           <div className="card-desc">${def.desc(pick)}</div>
-          <div className="card-tag discard-tag">✕ discard</div>
-        </button>`;
+          <button className=${'discard-toggle' + (selected ? ' selected' : '')} onClick=${() => G.toggleDiscard(i)}>${selected ? '✓ DISCARD' : 'DISCARD'}</button>
+        </div>`;
       })}
     </div>
+    <button className="primary discard-proceed" onClick=${() => G.proceedDiscard()}>Proceed</button>
   </div>`;
 }
 
@@ -2190,11 +2212,11 @@ function InlineDraft({ G }) {
     <div className="cards">
       ${G.offers.map((o, i) => {
         const def = POWERUPS[o.id];
-        return h`<button className="card" key=${i} onClick=${() => G.pickOffer(i)}>
+        return h`<button className=${'card ' + def.category} key=${i} onClick=${() => G.pickOffer(i)}>
           <div className="card-icon">${def.icon}${o.color !== undefined ? h`<${ColorDot} color=${o.color} />` : null}</div>
           <div className="card-name">${def.name}${o.color !== undefined ? ` — ${COLOR_NAMES[o.color]}` : ''}</div>
           <div className="card-desc">${def.desc(o)}</div>
-          <div className=${'card-tag ' + def.category}>${def.category}</div>
+          <div className=${'card-tag category-tag ' + def.category}>${CATEGORY_ICONS[def.category]}</div>
           ${def.tier === 3 ? h`<div className="card-tag legendary">⭐ legendary</div>` : null}
         </button>`;
       })}
