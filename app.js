@@ -15,7 +15,7 @@ const CONFIG = {
   // Stamped into every telemetry record so balance passes only compare runs
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
-  BALANCE_VERSION: 9, // v9: optional Part 2 discards double score multiplier
+  BALANCE_VERSION: 11, // v11: fixed starting moves per round; Part 2 starts with 8
   VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
@@ -25,21 +25,13 @@ const CONFIG = {
   TELEMETRY_KEY: '',
 
   // Run structure — cumulative score checkpoints along one run-long bar.
-  // v3 retune from telemetry (72 segments, 6 testers): v2 cleared segs 2-4 & 6
-  // at 100% — surplus moves carry over on a persistent board (they vanished at
-  // level end in the base game), so grants now track observed per-segment need
-  // (med. 9-16 moves used) and the middle checkpoints rose ~10%.
-  CHECKPOINTS: [80, 250, 520, 900, 1500, 2500],
-  CHECKPOINT_DIFFICULTY: [0.5, 0.6, 0.7, 0.8, 0.9, 1],
+  // Each round starts with its authored move budget; unused moves do not carry.
+  ROUND_SCORE: [40, 80, 100, 150, 250, 380],
   ENDLESS_SCORE_GROWTH: 3,
   PART_2_TARGET_SCALE: 0.25,
-  PART_2_ROUND_MOVES: 12,
+  ROUND_MOVES: [10, 10, 10, 10, 12, 15],
+  PART_2_ROUND_MOVES: 8,
   CASCADE_SPEED_STEP: 1.2,
-  START_MOVES: 10,                 // opening move pool (base L1 budget)
-  // Moves granted on crossing checkpoint i; the last entry is the victory-lap
-  // grant past the final flag (halved in v3 — the endless economy self-extends:
-  // bonus moves/chests stretched 16 grant moves into 40-60-move laps).
-  CHECKPOINT_MOVES: [10, 12, 13, 14, 15, 8],
   DRAFT_OPTIONS: 3,                // 2 or 3 — also toggleable in the UI
 
   // Per-move drip spawns — replaces the base game's per-level seeding of
@@ -543,16 +535,11 @@ class Game {
     this.startDraft();
   }
 
-  // Each fixed round scales its original score gap from 50% to 100%, then the
-  // existing colour-count adjustment is applied before gaps are accumulated.
+  // Accumulate each round's required score into the run-long targets.
   checkpoints() {
     const s = CONFIG.COLOUR_TARGET_SCALE[this.opts.colours] || 1;
-    let previous = 0, total = 0;
-    return CONFIG.CHECKPOINTS.map((target, i) => {
-      total += Math.round((target - previous) * CONFIG.CHECKPOINT_DIFFICULTY[i] * s);
-      previous = target;
-      return total;
-    });
+    let total = 0;
+    return CONFIG.ROUND_SCORE.map(score => total += Math.round(score * s));
   }
 
   nextTarget() {
@@ -666,6 +653,8 @@ class Game {
     }
     this.discardOffers = [...byKey.values()];
     this.discardSelected = new Set();
+    this.discardClosing = false;
+    this.discardPunch = 0;
     this.phase = 'discard';
     this.render();
   }
@@ -674,7 +663,7 @@ class Game {
     if (this.phase !== 'discard' || !this.discardOffers[i]) return;
     const key = this.discardOffers[i].key;
     if (this.discardSelected.has(key)) this.discardSelected.delete(key);
-    else this.discardSelected.add(key);
+    else { this.discardSelected.add(key); this.discardPunch++; }
     this.render();
   }
 
@@ -736,7 +725,7 @@ class Game {
   startRun() {
     this.rows = Math.min(CONFIG.MAX_BOARD, CONFIG.BOARD_ROWS + this.mods.expandRows);
     this.cols = Math.min(CONFIG.MAX_BOARD, CONFIG.BOARD_COLS + this.mods.expandCols);
-    this.movesLeft = CONFIG.START_MOVES;
+    this.movesLeft = CONFIG.ROUND_MOVES[0];
     this.lastWarnedMoves = null;
     this.score = 0;
     this.segStartScore = 0;  // telemetry: score at the current segment's start
@@ -791,14 +780,14 @@ class Game {
   checkProgress() {
     if (this.phase !== 'level') return;
     const cps = this.checkpoints();
-    let crossed = 0, fixedCrossed = 0, endlessCrossed = 0, granted = 0, finalFlag = false;
+    let crossed = 0, fixedCrossed = 0, endlessCrossed = 0, nextMoves = 0, finalFlag = false;
     while (this.run.checkpointIdx < cps.length && this.score >= cps[this.run.checkpointIdx]) {
       const i = this.run.checkpointIdx++;
-      const grant = CONFIG.CHECKPOINT_MOVES[Math.min(i, CONFIG.CHECKPOINT_MOVES.length - 1)];
-      this.movesLeft += grant; granted += grant; crossed++; fixedCrossed++;
+      const final = this.run.checkpointIdx >= cps.length;
+      nextMoves = final ? CONFIG.PART_2_ROUND_MOVES : CONFIG.ROUND_MOVES[this.run.checkpointIdx];
+      this.movesLeft = nextMoves; crossed++; fixedCrossed++;
       this.logSegment('clear', cps[i], 0);
       this.tempoUsed = false; // Tempo re-arms for the new segment
-      const final = this.run.checkpointIdx >= cps.length;
       this.run.pendingRewards.push(final ? 'rotate' : 'draft');
       if (final) {
         finalFlag = true;
@@ -809,9 +798,9 @@ class Game {
     }
     while (this.run.finalReached && this.score >= this.run.endlessTarget) {
       const target = this.run.endlessTarget;
-      const grant = CONFIG.PART_2_ROUND_MOVES;
       this.run.endlessRound++;
-      this.movesLeft += grant; granted += grant; crossed++; endlessCrossed++;
+      nextMoves = CONFIG.PART_2_ROUND_MOVES;
+      this.movesLeft = nextMoves; crossed++; endlessCrossed++;
       this.logSegment('clear', target, this.run.endlessRound);
       this.run.pendingRewards.push('rotate');
       this.tempoUsed = false;
@@ -820,7 +809,7 @@ class Game {
     }
     if (crossed) {
       this.lastCheckpoint = { n: this.run.checkpointIdx, crossed, fixedCrossed, endlessCrossed,
-                              moves: granted, finalFlag, round: this.run.endlessRound };
+                              moves: nextMoves, finalFlag, round: this.run.endlessRound };
       this.phase = 'checkpoint';
       return;
     }
@@ -2172,11 +2161,11 @@ function LevelScreen({ G }) {
         <h2>${cp.endlessCrossed
           ? `🔥 Endless Round ${cp.round} complete`
           : cp.finalFlag ? '🏁 Final checkpoint' : `🚩 Checkpoint ${cp.n}`}${cp.crossed > 1 ? ` (×${cp.crossed} in one move!)` : ''}</h2>
-        <p>+${cp.moves} moves${cp.finalFlag ? ' — Part 2 begins' : ''}</p>
+        <p>Next round starts with ${cp.moves} moves${cp.finalFlag ? ' — Part 2 begins' : ''}</p>
         <button className="primary" onClick=${() => G.continueRun()}>${reward === 'rotate' ? 'Discard for multiplier' : 'Draft a power-up'}</button>
       </div>
     </div>` : null}
-    ${G.phase === 'discard' ? h`<div className="overlay discard-overlay"><${InlineDiscard} G=${G} /></div>` : null}
+    ${G.phase === 'discard' ? h`<div className=${'overlay discard-overlay' + (G.discardClosing ? ' closing' : '')}><${InlineDiscard} G=${G} /></div>` : null}
     ${G.phase === 'draft' ? h`<${InlineDraft} G=${G} />` : null}
   </div>`;
 }
@@ -2185,9 +2174,9 @@ function InlineDiscard({ G }) {
   const previewMultiplier = G.run.multiplier * 2 ** G.discardSelected.size;
   return h`<div className="discard-panel">
     <div className="discard-heading">SCORE MULTIPLIER</div>
-    <div className="discard-multiplier">×${previewMultiplier}</div>
+    <div className=${'discard-multiplier' + (G.discardPunch ? ' punch' : '')} key=${G.discardPunch}>×${previewMultiplier}</div>
     <div className="discard-target">Next target score: <b>${G.run.endlessTarget}</b></div>
-    <div className="discard-rule">Each selected power-up loses one copy and doubles your score multiplier. You may skip or select as many as you want.</div>
+    <div className="discard-rule">DISCARD → MULTIPLIER ×2</div>
     <div className="cards">
       ${G.discardOffers.map((o, i) => {
         const pick = o.pick, def = POWERUPS[pick.id];
@@ -2195,12 +2184,15 @@ function InlineDiscard({ G }) {
         return h`<div className=${'card ' + def.category + (selected ? ' selected' : '')} key=${o.key}>
           <div className="card-icon">${def.icon}${pick.color !== undefined ? h`<${ColorDot} color=${pick.color} />` : null}${o.count > 1 ? h`<b>×${o.count}</b>` : null}</div>
           <div className="card-name">${def.name}${pick.color !== undefined ? ` — ${COLOR_NAMES[pick.color]}` : ''}</div>
-          <div className="card-desc">${def.desc(pick)}</div>
           <button className=${'discard-toggle' + (selected ? ' selected' : '')} onClick=${() => G.toggleDiscard(i)}>${selected ? '✓ DISCARD' : 'DISCARD'}</button>
         </div>`;
       })}
     </div>
-    <button className="primary discard-proceed" onClick=${() => G.proceedDiscard()}>Proceed</button>
+    <button className="primary discard-proceed" onClick=${() => {
+      G.discardClosing = true;
+      G.render();
+      setTimeout(() => G.proceedDiscard(), 200);
+    }}>Proceed</button>
   </div>`;
 }
 
@@ -2236,7 +2228,7 @@ function EndScreen({ G }) {
   return h`<div className="screen end">
     <h1>${win ? '🏆 Summit reached!' : '💀 Out of moves'}</h1>
     <div className="end-stats">
-      <div><b>${G.run.checkpointIdx}</b> / ${CONFIG.CHECKPOINTS.length} checkpoints crossed</div>
+      <div><b>${G.run.checkpointIdx}</b> / ${CONFIG.ROUND_SCORE.length} checkpoints crossed</div>
       ${G.run.finalReached ? h`<div><b>${G.run.endlessRound}</b> endless rounds completed</div>` : null}
       <div><b>${G.score}</b> final score</div>
       <div className="seedline">seed ${G.seed}</div>
