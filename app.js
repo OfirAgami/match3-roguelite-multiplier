@@ -16,7 +16,7 @@ const CONFIG = {
   // played on the same rules. Bump when mechanics or targets change.
   // Forked from base-game v14; this variant versions independently.
   BALANCE_VERSION: 11, // v11: fixed starting moves per round; Part 2 starts with 8
-  VARIANT: 'ofir',                 // stamped into telemetry so datasets never mix
+  VARIANT: 'multiplier',           // stamped into telemetry so datasets never mix
 
   // Remote telemetry sink — SHARED with the base game (same Supabase table;
   // records separate by payload->>variant). Publishable key — safe to ship.
@@ -136,9 +136,9 @@ const K = (r, c) => r + ',' + c;
 /* --------------------------- Play telemetry ------------------------------
    Every checkpoint SEGMENT (the stretch between two checkpoints) is logged
    to localStorage so difficulty can be tuned from real play. Records carry
-   variant:'persistent' and their own key so base-game datasets never mix.
+   variant:'multiplier' and their own key so base-game datasets never mix.
    Scripted/bot runs carry fast:true and are excluded from human summaries. */
-const TELEMETRY_KEY = 'rl_ofir_telemetry_v1';
+const TELEMETRY_KEY = 'rl_multiplier_telemetry_v1';
 const TELEMETRY_MAX_RECORDS = 500;
 function telemetryAll() {
   try { return JSON.parse(localStorage.getItem(TELEMETRY_KEY)) || []; } catch (e) { return []; }
@@ -1910,7 +1910,7 @@ function StatsPanel() {
 function MenuScreen({ G }) {
   const [seed, setSeed] = React.useState(() => String(1 + Math.floor(Math.random() * 999999999)));
   return h`<div className="screen menu">
-    <h1>🏔️ Match-3 Roguelite — Ofir</h1>
+    <h1>🏔️ Match-3 Roguelite — Multiplier</h1>
     <p className="sub">One board, one bar. Six rounds ramp from 50% to full difficulty, then endless rounds rotate one power-up and raise the next target.</p>
     <div className="menu-box">
       <label>Seed <input value=${seed} onChange=${e => setSeed(e.target.value)} inputMode="numeric" /></label>
