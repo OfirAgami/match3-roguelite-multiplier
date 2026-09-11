@@ -309,6 +309,17 @@ function createCanvasView(canvas, G) {
       return { cell, x: (W - G.cols * cell) / 2, y: 605 + (820 - G.rows * cell) / 2 };
     }
 
+    function dragPosition(d, l) {
+      const x = (d.x + l.x + (d.target.c + .5) * l.cell) / 2;
+      const y = (d.y + l.y + (d.target.r + .5) * l.cell) / 2;
+      return {
+        x: Math.max(l.x + (Math.max(0, d.c - 1) + .5) * l.cell,
+          Math.min(l.x + (Math.min(G.cols - 1, d.c + 1) + .5) * l.cell, x)),
+        y: Math.max(l.y + (Math.max(0, d.r - 1) + .5) * l.cell,
+          Math.min(l.y + (Math.min(G.rows - 1, d.r + 1) + .5) * l.cell, y)),
+      };
+    }
+
     function label(value, x, y, size = 28, color = cream, align = 'center') {
       ctx.font = `${size}px Anton, sans-serif`;
       ctx.fillStyle = color;
@@ -396,8 +407,7 @@ function createCanvasView(canvas, G) {
         p.nudgeY += (dy * push - p.nudgeY) * settle;
         p.lift += ((held ? 1 : 0) - p.lift) * settle;
         if (held) {
-          at.x = (drag.x + l.x + (drag.target.c + .5) * l.cell) / 2;
-          at.y = (drag.y + l.y + (drag.target.r + .5) * l.cell) / 2;
+          Object.assign(at, dragPosition(drag, l));
         } else { at.x += p.nudgeX; at.y += p.nudgeY; }
         ctx.save();
         if (!held) { ctx.beginPath(); ctx.rect(34, 605, 873, 834); ctx.clip(); }
@@ -648,8 +658,9 @@ function createCanvasView(canvas, G) {
       if (!d) return null;
       const l = layout(), p = positions.get(G.board[d.r][d.c].id);
       if (p) {
-        p.x = p.fromX = (d.x + l.x + (d.target.c + .5) * l.cell) / 2;
-        p.y = p.fromY = (d.y + l.y + (d.target.r + .5) * l.cell) / 2;
+        const at = dragPosition(d, l);
+        p.x = p.fromX = at.x;
+        p.y = p.fromY = at.y;
         p.start = boardTime; p.duration = 1;
       }
       drag = null;
