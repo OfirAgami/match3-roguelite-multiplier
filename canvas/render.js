@@ -165,9 +165,11 @@ function createCanvasView(canvas, G) {
     const positions = new Map(), effects = new Map(), clearBursts = new Map();
     let drag = null, phase, boardRef, shakeStart = 0, shaking = false, boardTime = 0;
     let powerPage = 0;
-    let impact = null, lastScore = 0, lastAward, impactRun;
+    let impact = null, lastScore = 0, lastAward, impactRun, scorePunch = -Infinity;
+    const haptic = ms => navigator.vibrate?.(ms);
 
     function impactValue(now) {
+      if (impact.ended !== null) return impact.amount;
       const ease = 1 - 2 ** (-(now - impact.start) / 1000 * 10);
       // Geometric interpolation with a +1 offset so count-ups can start at zero.
       return Math.expm1(Math.log1p(impact.from) + (Math.log1p(impact.amount) - Math.log1p(impact.from)) * ease);
@@ -175,8 +177,9 @@ function createCanvasView(canvas, G) {
 
     function updateImpact(now) {
       if (impactRun !== G.run || G.score < lastScore) {
-        impact = null; lastScore = G.score; lastAward = G.scoreImpact; impactRun = G.run;
+        impact = null; lastScore = G.score; lastAward = G.scoreImpact; impactRun = G.run; scorePunch = -Infinity;
       }
+      if (G.scoreImpact && G.scoreImpact !== lastAward) haptic(10);
       const gained = G.score - lastScore;
       if (gained > 0) {
         const continuing = impact && impact.move === G.moveNum && impact.ended === null;
@@ -188,21 +191,29 @@ function createCanvasView(canvas, G) {
           cells: award ? award.cells : [] };
       }
       lastScore = G.score; lastAward = G.scoreImpact;
-      if (impact && !G.busy && impact.ended === null) impact.ended = now;
-      if (impact && (impact.move !== G.moveNum || (impact.ended !== null && now - impact.ended >= 90))) impact = null;
+      if (impact && G.scoreStage === 'transfer' && impact.ended === null) {
+        impact.ended = now;
+        haptic(12);
+      }
+      if (impact && impact.ended !== null && now - impact.ended >= CONFIG.SCORE_TRANSFER_MS) {
+        scorePunch = impact.ended + CONFIG.SCORE_TRANSFER_MS;
+        impact = null;
+      }
+      if (impact && impact.move !== G.moveNum) impact = null;
     }
 
     function drawImpact(now) {
       if (!impact) return;
       const age = now - impact.start;
       const enter = Math.min(1, age / 60);
-      const leave = impact.ended === null ? 0 : (now - impact.ended) / 90;
+      const leave = impact.ended === null ? 0 : Math.min(1, (now - impact.ended) / CONFIG.SCORE_TRANSFER_MS);
+      const travel = 2.70158 * leave ** 3 - 1.70158 * leave ** 2;
       const punch = Math.sin(enter * Math.PI);
       const strength = Math.min(1, Math.max((impact.cascade - 1) / 7, Math.log2(impact.multiplier) / 8));
       const size = (.72 + strength * .28) * (1 + punch * .18) * (1 - leave * .18);
       const l = layout(), cells = impact.cells;
       ctx.save();
-      ctx.beginPath(); ctx.rect(0, 130, W, H - 130); ctx.clip();
+      ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
       const alpha = (1 - leave) * Math.min(1, (now - impact.born) / 12);
       ctx.globalAlpha = alpha;
 
@@ -240,25 +251,33 @@ function createCanvasView(canvas, G) {
         ctx.restore();
       }
 
-      ctx.translate(471, 315 - Math.sin(enter * Math.PI) * 9);
+      ctx.translate(471, 315 + (85 - 315) * travel - Math.sin(enter * Math.PI) * 9);
       ctx.scale(size, size);
-      ctx.rotate(-.1 - punch * .085);
+      ctx.rotate((-.1 - punch * .085) * (1 - leave));
       const value = `+${Math.round(impactValue(now)).toLocaleString('en-US')}`;
       const width = Math.min(815, Math.max(340, (`+${impact.amount.toLocaleString('en-US')}`).length * 83));
       const edge = width / 2 + 35;
-      const burst = new Path2D(`M ${-edge - 40} 140 L ${-edge + 25} 69 L ${-edge - 50} -40
-        L ${-edge + 44} -34 L ${-edge + 5} -156 L -170 -115 L -105 -196 L -94 -139
-        L 135 -206 L 96 -148 L ${edge + 10} -219 L ${edge - 22} -141
-        L ${edge + 76} -170 L ${edge + 16} -44 L ${edge + 68} 42 L ${edge + 12} 77
-        L ${edge + 56} 178 L ${edge - 66} 130 L 264 223 L 163 165
-        L -112 199 L -146 155 L -264 200 L -241 143 Z`);
+      const corners = [[-edge - 40, 140], [-edge + 25, 69], [-edge - 50, -40],
+        [-edge + 44, -34], [-edge + 5, -156], [-170, -115], [-105, -196], [-94, -139],
+        [135, -206], [96, -148], [edge + 10, -219], [edge - 22, -141],
+        [edge + 76, -170], [edge + 16, -44], [edge + 68, 42], [edge + 12, 77],
+        [edge + 56, 178], [edge - 66, 130], [264, 223], [163, 165],
+        [-112, 199], [-146, 155], [-264, 200], [-241, 143]];
+      const burst = new Path2D();
+      // Cut each point into a broad flat tip, keeping every edge straight.
+      corners.forEach(([x, y], i) => {
+        const prev = corners[(i + corners.length - 1) % corners.length], next = corners[(i + 1) % corners.length];
+        burst[i ? 'lineTo' : 'moveTo'](x + (prev[0] - x) * .22, y + (prev[1] - y) * .22);
+        burst.lineTo(x + (next[0] - x) * .22, y + (next[1] - y) * .22);
+      });
+      burst.closePath();
       // Ten silhouette changes per second, independent of the score punch.
       const burstFrame = Math.floor((now - impact.born) / 100);
       ctx.save();
       ctx.scale(burstFrame % 2 ? -1 : 1, burstFrame % 3 === 0 ? -.94 : 1);
       ctx.rotate((burstFrame % 3 - 1) * .035);
       ctx.save(); ctx.translate(9, 13); ctx.fillStyle = '#0d0915'; ctx.fill(burst); ctx.restore();
-      ctx.lineJoin = 'miter'; ctx.lineWidth = 7; ctx.strokeStyle = cream; ctx.stroke(burst);
+      ctx.lineJoin = 'bevel'; ctx.lineWidth = 7; ctx.strokeStyle = cream; ctx.stroke(burst);
       ctx.fillStyle = '#ff3942'; ctx.fill(burst);
       ctx.restore();
 
@@ -280,7 +299,8 @@ function createCanvasView(canvas, G) {
       ctx.restore();
       // Tags have a fixed anchor, regardless of cascade count or score punches.
       ctx.save(); ctx.globalAlpha = alpha;
-      ctx.translate(471, 315); ctx.scale(.85, .85); ctx.rotate(-.1);
+      ctx.translate(471, 315 + (85 - 315) * travel);
+      ctx.scale(.85 * (1 - leave * .18), .85 * (1 - leave * .18)); ctx.rotate(-.1 * (1 - leave));
       const mult = `×${impact.multiplier.toLocaleString('en-US')}`;
       const multWidth = Math.min(360, Math.max(150, mult.length * 58));
       const cascadeWidth = impact.cascade > 1 ? 193 : 0;
@@ -409,7 +429,7 @@ function createCanvasView(canvas, G) {
         }
         let flash = 0;
         if (t.pop) {
-          // Start bursting from the held pose immediately; never land first.
+          // Start bursting immediately, without a landing animation.
           const progress = Math.max(0, Math.min(1, (now - p.flags.pop - popDelay) / G.animationMs(150)));
           const started = now >= p.flags.pop + popDelay;
           const scale = started ? 1.18 * (1 - progress) : 1;
@@ -587,8 +607,11 @@ function createCanvasView(canvas, G) {
       const score = G.score.toLocaleString('en-US'), target = G.nextTarget().toLocaleString('en-US');
       text('TARGET', 204, 30, 20, 82, lavender);
       text(target, 204, 63, 36, Math.min(215, target.length * 23), lavender, 'center', 'Bungee');
+      const punch = 1 + .16 * Math.sin(Math.min(1, (now - scorePunch) / 240) * Math.PI);
+      ctx.save(); ctx.translate(471, 68); ctx.scale(punch, punch); ctx.translate(-471, -68);
       text('SCORE', 471, 25, 25, 94, cream);
       text(score, 471, 61, 49, Math.min(280, score.length * 30), cream, 'center', 'Bungee');
+      ctx.restore();
       text('MOVES', 738, 30, 20, 74, lavender);
       text(String(G.movesLeft).padStart(2, '0'), 738, 63, 35, Math.max(52, String(G.movesLeft).length * 26), G.movesLeft <= 3 ? '#f37a78' : lavender, 'center', 'Bungee');
       ctx.fillStyle = '#82719e'; ctx.fillRect(333, 28, 2, 82); ctx.fillRect(637, 28, 2, 82);
@@ -631,6 +654,7 @@ function createCanvasView(canvas, G) {
       canvas.setPointerCapture(e.pointerId);
       for (const p of positions.values()) p.wasTarget = false;
       drag = { ...cell, target: cell, pointerId: e.pointerId };
+      haptic(6);
       move(e);
     }
     function move(e) {
@@ -655,7 +679,16 @@ function createCanvasView(canvas, G) {
       if (!drag || e.pointerId !== drag.pointerId) return;
       move(e);
       const d = release();
-      if (G.isSwappable(d, d.target)) G.trySwap({ r: d.r, c: d.c }, d.target, true);
+      haptic(8);
+      if (G.isSwappable(d, d.target)) {
+        const l = layout();
+        for (const [source, target] of [[d, d.target], [d.target, d]]) {
+          const p = positions.get(G.board[source.r][source.c].id);
+          const x = l.x + (target.c + .5) * l.cell, y = l.y + (target.r + .5) * l.cell;
+          Object.assign(p, { x, y, fromX: x, fromY: y, nudgeX: 0, nudgeY: 0 });
+        }
+        G.trySwap({ r: d.r, c: d.c }, d.target, true);
+      }
     }
     return { draw, down, move, up, cancel: release, setPowerPage: page => { powerPage = page; } };
 }
