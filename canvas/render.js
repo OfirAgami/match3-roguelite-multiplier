@@ -203,6 +203,7 @@ function createCanvasView(canvas, G) {
         impact = { start: now, born: continuing ? impact.born : now, settled: null, ended: null,
           from: continuing ? impactValue(now) : 0,
           move: G.moveNum, amount: gained + (continuing ? impact.amount : 0),
+          roundPoints: G.nextTarget() - G.segStartScore,
           multiplier: G.run.multiplier, cascade: award ? award.cascade : continuing ? impact.cascade : 0,
           cells: award ? award.cells : [] };
       }
@@ -262,32 +263,35 @@ function createCanvasView(canvas, G) {
       ctx.translate(471, 315 + (85 - 315) * travel - Math.sin(enter * Math.PI) * 9);
       ctx.scale(size, size);
       ctx.rotate((-.1 - punch * .085) * (1 - leave));
-      const value = `+${Math.round(impactValue(now)).toLocaleString('en-US')}`;
+      const shown = Math.round(impactValue(now));
+      const value = `+${shown.toLocaleString('en-US')}`;
       const width = Math.min(815, Math.max(340, (`+${impact.amount.toLocaleString('en-US')}`).length * 83));
-      const edge = width / 2 + 35;
-      const corners = [[-edge - 40, 140], [-edge + 25, 69], [-edge - 50, -40],
-        [-edge + 44, -34], [-edge + 5, -156], [-170, -115], [-105, -196], [-94, -139],
-        [135, -206], [96, -148], [edge + 10, -219], [edge - 22, -141],
-        [edge + 76, -170], [edge + 16, -44], [edge + 68, 42], [edge + 12, 77],
-        [edge + 56, 178], [edge - 66, 130], [264, 223], [163, 165],
-        [-112, 199], [-146, 155], [-264, 200], [-241, 143]];
-      const burst = new Path2D();
-      // Cut each point into a broad flat tip, keeping every edge straight.
-      corners.forEach(([x, y], i) => {
-        const prev = corners[(i + corners.length - 1) % corners.length], next = corners[(i + 1) % corners.length];
-        burst[i ? 'lineTo' : 'moveTo'](x + (prev[0] - x) * .22, y + (prev[1] - y) * .22);
-        burst.lineTo(x + (next[0] - x) * .22, y + (next[1] - y) * .22);
-      });
-      burst.closePath();
-      // Ten silhouette changes per second, independent of the score punch.
-      const burstFrame = Math.floor((now - impact.born) / 100);
-      ctx.save();
-      ctx.scale(burstFrame % 2 ? -1 : 1, burstFrame % 3 === 0 ? -.94 : 1);
-      ctx.rotate((burstFrame % 3 - 1) * .035);
-      ctx.save(); ctx.translate(9, 13); ctx.fillStyle = '#0d0915'; ctx.fill(burst); ctx.restore();
-      ctx.lineJoin = 'bevel'; ctx.lineWidth = 7; ctx.strokeStyle = cream; ctx.stroke(burst);
-      ctx.fillStyle = '#ff3942'; ctx.fill(burst);
-      ctx.restore();
+      if (shown > impact.roundPoints * .2) {
+        const edge = width / 2 + 35;
+        const corners = [[-edge - 40, 140], [-edge + 25, 69], [-edge - 50, -40],
+          [-edge + 44, -34], [-edge + 5, -156], [-170, -115], [-105, -196], [-94, -139],
+          [135, -206], [96, -148], [edge + 10, -219], [edge - 22, -141],
+          [edge + 76, -170], [edge + 16, -44], [edge + 68, 42], [edge + 12, 77],
+          [edge + 56, 178], [edge - 66, 130], [264, 223], [163, 165],
+          [-112, 199], [-146, 155], [-264, 200], [-241, 143]];
+        const burst = new Path2D();
+        // Cut each point into a broad flat tip, keeping every edge straight.
+        corners.forEach(([x, y], i) => {
+          const prev = corners[(i + corners.length - 1) % corners.length], next = corners[(i + 1) % corners.length];
+          burst[i ? 'lineTo' : 'moveTo'](x + (prev[0] - x) * .22, y + (prev[1] - y) * .22);
+          burst.lineTo(x + (next[0] - x) * .22, y + (next[1] - y) * .22);
+        });
+        burst.closePath();
+        // Ten silhouette changes per second, independent of the score punch.
+        const burstFrame = Math.floor((now - impact.born) / 100);
+        ctx.save();
+        ctx.scale(burstFrame % 2 ? -1 : 1, burstFrame % 3 === 0 ? -.94 : 1);
+        ctx.rotate((burstFrame % 3 - 1) * .035);
+        ctx.save(); ctx.translate(9, 13); ctx.fillStyle = '#0d0915'; ctx.fill(burst); ctx.restore();
+        ctx.lineJoin = 'bevel'; ctx.lineWidth = 7; ctx.strokeStyle = cream; ctx.stroke(burst);
+        ctx.fillStyle = '#ff3942'; ctx.fill(burst);
+        ctx.restore();
+      }
 
       // Repeat the same glyphs to make a solid comic extrusion, then the cream face.
       ctx.save();
