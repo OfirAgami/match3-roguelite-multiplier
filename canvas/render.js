@@ -383,6 +383,9 @@ function createCanvasView(canvas, G) {
         }
         if (p.x !== x || p.y !== ty) {
           const at = position(p, now);
+          // Commit the preview pose into the normal swap animation without a jump.
+          at.x += p.nudgeX; at.y += p.nudgeY;
+          p.nudgeX = 0; p.nudgeY = 0;
           Object.assign(p, { fromX: at.x, fromY: at.y, x, y: ty, start: now,
             duration: G.fast ? 1 : G.animationMs(t.fallDist ? G.fallDur(t.fallDist) : CONFIG.SWAP_MS), falling: !!t.fallDist });
         }
@@ -400,11 +403,15 @@ function createCanvasView(canvas, G) {
         }
         const at = position(p, now);
         const held = drag && drag.r === r && drag.c === c;
+        const target = drag && !held && drag.target.r === r && drag.target.c === c;
+        if (target) p.wasTarget = true;
         const dx = drag ? c - drag.target.c : 0, dy = drag ? r - drag.target.r : 0;
         const distance = Math.hypot(dx, dy);
-        const push = drag && !held && distance > 0 && distance <= Math.SQRT2 ? l.cell * .12 / distance : 0;
-        p.nudgeX += (dx * push - p.nudgeX) * settle;
-        p.nudgeY += (dy * push - p.nudgeY) * settle;
+        const push = drag && !held && !p.wasTarget && distance > 0 && distance <= Math.SQRT2 ? l.cell * .12 / distance : 0;
+        const offsetX = target ? (drag.c - c) * l.cell : dx * push;
+        const offsetY = target ? (drag.r - r) * l.cell : dy * push;
+        p.nudgeX += (offsetX - p.nudgeX) * settle;
+        p.nudgeY += (offsetY - p.nudgeY) * settle;
         p.lift += ((held ? 1 : 0) - p.lift) * settle;
         if (held) {
           Object.assign(at, dragPosition(drag, l));
@@ -636,6 +643,7 @@ function createCanvasView(canvas, G) {
       if (G.fast) { G.fast = false; G.render(); }
       canvas.focus({ preventScroll: true });
       canvas.setPointerCapture(e.pointerId);
+      for (const p of positions.values()) p.wasTarget = false;
       drag = { ...cell, x: p.x, y: p.y, target: cell, pointerId: e.pointerId };
       move(e);
     }
