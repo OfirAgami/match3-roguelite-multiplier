@@ -1910,7 +1910,7 @@ function StatsPanel() {
   </div>`;
 }
 
-function MenuScreen({ G }) {
+function MenuScreen({ G, swapHint = 'Swipe or tap two adjacent tiles to swap.' }) {
   const [seed, setSeed] = React.useState(() => String(1 + Math.floor(Math.random() * 999999999)));
   return h`<div className="screen menu">
     <h1>🏔️ Match-3 Roguelite — Multiplier</h1>
@@ -1922,7 +1922,7 @@ function MenuScreen({ G }) {
       <button className="primary" onClick=${() => G.newRun(parseInt(seed, 10) || 1)}>Start run</button>
     </div>
     <${StatsPanel} />
-    <p className="hint">Swipe or tap two adjacent tiles to swap. Match 4 → ${SPECIAL_EMOJI[CONFIG.MATCH_4_SPAWNS]} arrow, 5 → ${SPECIAL_EMOJI[CONFIG.MATCH_5_SPAWNS]} lightning, L/T → ${SPECIAL_EMOJI[CONFIG.MATCH_SHAPE_SPAWNS]} bomb.</p>
+    <p className="hint">${swapHint} Match 4 → ${SPECIAL_EMOJI[CONFIG.MATCH_4_SPAWNS]} arrow, 5 → ${SPECIAL_EMOJI[CONFIG.MATCH_5_SPAWNS]} lightning, L/T → ${SPECIAL_EMOJI[CONFIG.MATCH_SHAPE_SPAWNS]} bomb.</p>
   </div>`;
 }
 

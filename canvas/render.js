@@ -163,7 +163,7 @@ function createCanvasView(canvas, G) {
 
     const kinds = ['R', 'Y', 'G', 'B', 'P', 'O'];
     const positions = new Map(), effects = new Map(), clearBursts = new Map();
-    let selected = null, drag = null, phase, boardRef, shakeStart = 0, shaking = false;
+    let drag = null, phase, boardRef, shakeStart = 0, shaking = false, boardTime = 0;
     let powerPage = 0;
     let impact = null, lastScore = 0, lastAward, impactRun;
 
@@ -305,8 +305,8 @@ function createCanvasView(canvas, G) {
     }
 
     function layout() {
-      const cell = Math.min(789 / G.cols, 770 / G.rows);
-      return { cell, x: (W - G.cols * cell) / 2, y: 621 + (783 - G.rows * cell) / 2 };
+      const cell = Math.min(849 / G.cols, 807 / G.rows);
+      return { cell, x: (W - G.cols * cell) / 2, y: 605 + (820 - G.rows * cell) / 2 };
     }
 
     function label(value, x, y, size = 28, color = cream, align = 'center') {
@@ -334,6 +334,8 @@ function createCanvasView(canvas, G) {
 
     function drawBoard(now) {
       const l = layout(), active = new Set();
+      const settle = 1 - Math.exp(-(now - boardTime) / 45);
+      boardTime = now;
       ctx.save();
       if (G.shake && !shaking) shakeStart = now;
       shaking = !!G.shake;
@@ -342,12 +344,14 @@ function createCanvasView(canvas, G) {
         const amp = G.shake * Math.max(0, 1 - age) * l.cell / 56;
         ctx.translate(Math.sin(age * 35) * amp, Math.cos(age * 29) * amp * .6);
       }
-      roundRect(70, 621, 801, 783, 10);
+      roundRect(40, 605, 861, 820, 10);
       ctx.fillStyle = '#09070f85'; ctx.fill();
       // Tile entry is clipped at the top, as falling pieces enter the board.
       ctx.save();
-      ctx.beginPath(); ctx.rect(64, 621, 813, 797); ctx.clip();
-      for (let r = 0; r < G.rows; r++) for (let c = 0; c < G.cols; c++) {
+      const cells = G.board.flatMap((row, r) => row.map((_, c) => ({ r, c })));
+      // The held piece renders last, above its neighbours and outside the fall clip.
+      if (drag) cells.push(...cells.splice(drag.r * G.cols + drag.c, 1));
+      for (const { r, c } of cells) {
         const t = G.board[r][c], key = K(r, c);
         const x = l.x + (c + .5) * l.cell, y = l.y + (r + .5) * l.cell;
         const mark = G.marks.has(key), pinata = G.pinatas.has(key), triple = G.triples.has(key);
@@ -363,7 +367,7 @@ function createCanvasView(canvas, G) {
         const ty = l.y + ((t.enter ?? r) + .5) * l.cell;
         let p = positions.get(t.id);
         if (!p) {
-          p = { x, y: ty, fromX: x, fromY: ty, start: now, duration: 1, flags: {} };
+          p = { x, y: ty, fromX: x, fromY: ty, start: now, duration: 1, flags: {}, nudgeX: 0, nudgeY: 0, lift: 0 };
           positions.set(t.id, p);
         }
         if (p.x !== x || p.y !== ty) {
@@ -384,7 +388,21 @@ function createCanvasView(canvas, G) {
           if (!t[flag]) delete p.flags[flag];
         }
         const at = position(p, now);
-        ctx.save(); ctx.translate(at.x, at.y); ctx.scale(l.cell / 112.7, l.cell / 112.7);
+        const held = drag && drag.r === r && drag.c === c;
+        const dx = drag ? c - drag.target.c : 0, dy = drag ? r - drag.target.r : 0;
+        const distance = Math.hypot(dx, dy);
+        const push = drag && !held && distance > 0 && distance <= Math.SQRT2 ? l.cell * .12 / distance : 0;
+        p.nudgeX += (dx * push - p.nudgeX) * settle;
+        p.nudgeY += (dy * push - p.nudgeY) * settle;
+        p.lift += ((held ? 1 : 0) - p.lift) * settle;
+        if (held) {
+          at.x = (drag.x + l.x + (drag.target.c + .5) * l.cell) / 2;
+          at.y = (drag.y + l.y + (drag.target.r + .5) * l.cell) / 2;
+        } else { at.x += p.nudgeX; at.y += p.nudgeY; }
+        ctx.save();
+        if (!held) { ctx.beginPath(); ctx.rect(34, 605, 873, 834); ctx.clip(); }
+        ctx.translate(at.x, at.y); ctx.scale(l.cell / 112.7, l.cell / 112.7);
+        ctx.scale(1 + p.lift * .18, 1 + p.lift * .18);
         if (t.wiggle) {
           const progress = Math.min(1, (now - p.flags.wiggle) / G.animationMs(350));
           ctx.translate(Math.sin(progress * Math.PI * 8) * 8 * (1 - progress), 0);
@@ -425,10 +443,6 @@ function createCanvasView(canvas, G) {
           ctx.fill(shapes[kind]);
           ctx.restore();
         }
-        if (selected && selected.r === r && selected.c === c) {
-          ctx.strokeStyle = cream; ctx.lineWidth = 3;
-          roundRect(-49, -49, 98, 98, 12); ctx.stroke();
-        }
         if (t.special) {
           badge(t.special === 'arrow' ? (t.dir === 'h' ? '↔' : '↕') : SPECIAL_EMOJI[t.special], 0, 0);
           if (t.countdown !== null) badge(Math.max(0, t.countdown), 33, -34, '#efcd79');
@@ -451,7 +465,7 @@ function createCanvasView(canvas, G) {
       if (G.phase === 'level' && G.movesLeft > 0 && G.movesLeft <= 3) {
         ctx.globalAlpha = .35 + .25 * Math.sin(now / (G.movesLeft * 100));
         ctx.strokeStyle = '#ff554f'; ctx.shadowColor = '#ff554f'; ctx.shadowBlur = 22; ctx.lineWidth = 5;
-        roundRect(70, 621, 801, 783, 10); ctx.stroke();
+        roundRect(40, 605, 861, 820, 10); ctx.stroke();
       }
       ctx.restore();
     }
@@ -561,7 +575,7 @@ function createCanvasView(canvas, G) {
     function draw(now) {
       ctx.clearRect(0, 0, W, H);
       if (phase !== G.phase || boardRef !== G.board) {
-        selected = null; drag = null;
+        drag = null;
         if (!G.board) { positions.clear(); effects.clear(); clearBursts.clear(); }
         phase = G.phase; boardRef = G.board;
       }
@@ -606,35 +620,48 @@ function createCanvasView(canvas, G) {
       return r >= 0 && r < G.rows && c >= 0 && c < G.cols ? { r, c } : null;
     }
     function down(e) {
-      if (G.phase !== 'level' || G.busy) return;
+      if (G.phase !== 'level' || G.busy || drag) return;
       const p = point(e), cell = cellAt(p);
-      if (!cell) return;
+      if (!cell || !G.board[cell.r][cell.c] || G.board[cell.r][cell.c].chomper) return;
       if (G.fast) { G.fast = false; G.render(); }
       canvas.focus({ preventScroll: true });
       canvas.setPointerCapture(e.pointerId);
-      drag = { ...cell, x: p.x, y: p.y, fired: false };
+      drag = { ...cell, x: p.x, y: p.y, target: cell, pointerId: e.pointerId };
+      move(e);
     }
     function move(e) {
-      if (!drag || drag.fired) return;
-      const p = point(e), dx = p.x - drag.x, dy = p.y - drag.y;
-      const mag = Math.max(Math.abs(dx), Math.abs(dy));
-      if (mag > layout().cell * .35) {
-        drag.fired = true;
-        const dir = G.mods.diagSwap && Math.min(Math.abs(dx), Math.abs(dy)) > mag * .55
-          ? [dy > 0 ? 1 : -1, dx > 0 ? 1 : -1]
-          : Math.abs(dx) > Math.abs(dy) ? [0, dx > 0 ? 1 : -1] : [dy > 0 ? 1 : -1, 0];
-        G.trySwap({ r: drag.r, c: drag.c }, { r: drag.r + dir[0], c: drag.c + dir[1] });
-        selected = null;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const p = point(e), l = layout();
+      drag.x = p.x; drag.y = p.y;
+      let closest = Infinity;
+      for (let r = Math.max(0, drag.r - 1); r <= Math.min(G.rows - 1, drag.r + 1); r++) {
+        for (let c = Math.max(0, drag.c - 1); c <= Math.min(G.cols - 1, drag.c + 1); c++) {
+          if ((r !== drag.r || c !== drag.c) && !G.isSwappable(drag, { r, c })) continue;
+          if (!G.board[r][c] || G.board[r][c].chomper) continue;
+          const distance = (p.x - l.x - (c + .5) * l.cell) ** 2 + (p.y - l.y - (r + .5) * l.cell) ** 2;
+          if (distance < closest) { closest = distance; drag.target = { r, c }; }
+        }
       }
     }
-    function up() {
-      const d = drag; drag = null;
-      if (!d || d.fired) return;
-      if (selected && G.isSwappable(selected, d)) { G.trySwap(selected, { r: d.r, c: d.c }); selected = null; }
-      else if (selected && selected.r === d.r && selected.c === d.c) selected = null;
-      else selected = { r: d.r, c: d.c };
+    function release() {
+      const d = drag;
+      if (!d) return null;
+      const l = layout(), p = positions.get(G.board[d.r][d.c].id);
+      if (p) {
+        p.x = p.fromX = (d.x + l.x + (d.target.c + .5) * l.cell) / 2;
+        p.y = p.fromY = (d.y + l.y + (d.target.r + .5) * l.cell) / 2;
+        p.start = boardTime; p.duration = 1;
+      }
+      drag = null;
+      return d;
     }
-    return { draw, down, move, up, cancel: () => { drag = null; }, setPowerPage: page => { powerPage = page; } };
+    function up(e) {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      move(e);
+      const d = release();
+      if (G.isSwappable(d, d.target)) G.trySwap({ r: d.r, c: d.c }, d.target);
+    }
+    return { draw, down, move, up, cancel: release, setPowerPage: page => { powerPage = page; } };
 }
 
 function MultiplierCanvas({ G }) {
@@ -658,9 +685,9 @@ function MultiplierCanvas({ G }) {
   const playing = G.board && !['menu', 'win', 'loss'].includes(G.phase);
   return h`<div className=${'canvas-game phase-' + G.phase + (G.board ? ' has-board' : '')}>
     <canvas id="game" ref=${ref} tabIndex="0" role="img"
-      aria-label=${G.board ? `Match-3 board. Score ${G.score}. Target ${G.nextTarget()}. ${G.movesLeft} moves. Multiplier ${G.run.multiplier}. Swipe or tap adjacent tiles to swap.` : 'Multiplier'}
+      aria-label=${G.board ? `Match-3 board. Score ${G.score}. Target ${G.nextTarget()}. ${G.movesLeft} moves. Multiplier ${G.run.multiplier}. Drag a piece and release over a neighbouring tile to swap.` : 'Multiplier'}
       onPointerDown=${e => view.current.down(e)} onPointerMove=${e => view.current.move(e)}
-      onPointerUp=${() => view.current.up()} onPointerCancel=${() => view.current.cancel()} />
+      onPointerUp=${e => view.current.up(e)} onPointerCancel=${() => view.current.cancel()} />
     ${playing ? h`<div className="canvas-controls">
       ${chips.slice(currentPage * 5, currentPage * 5 + 5).map((ch, i) => h`<button key=${ch.key}
         className=${'power-hit' + (info === ch.key ? ' active' : '')}
@@ -677,7 +704,7 @@ function MultiplierCanvas({ G }) {
       ${G.fast ? h`<button className="canvas-fast" onClick=${() => { G.fast = false; G.render(); }}>⏩</button>` : null}
     </div>` : null}
     <div className="canvas-ui">
-      ${G.phase === 'menu' ? h`<${MenuScreen} G=${G} />`
+      ${G.phase === 'menu' ? h`<${MenuScreen} G=${G} swapHint="Drag a piece and release over a neighbouring tile to swap." />`
         : G.phase === 'draft' && !G.board ? h`<${DraftScreen} G=${G} />`
         : G.phase === 'win' || G.phase === 'loss' ? h`<${EndScreen} G=${G} />`
         : h`<${LevelChoices} G=${G} />`}
