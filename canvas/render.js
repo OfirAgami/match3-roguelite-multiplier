@@ -168,7 +168,9 @@ function createCanvasView(canvas, G) {
     let impact = null, lastScore = 0, lastAward, impactRun;
 
     function impactValue(now) {
-      return impact.from + (impact.amount - impact.from) * Math.min(1, (now - impact.start) / 60);
+      const ease = 1 - 2 ** (-(now - impact.start) / 1000 * 10);
+      // Geometric interpolation with a +1 offset so count-ups can start at zero.
+      return Math.expm1(Math.log1p(impact.from) + (Math.log1p(impact.amount) - Math.log1p(impact.from)) * ease);
     }
 
     function updateImpact(now) {
