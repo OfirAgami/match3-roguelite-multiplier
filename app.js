@@ -32,8 +32,6 @@ const CONFIG = {
   ROUND_MOVES: [10, 10, 10, 10, 12, 15],
   PART_2_ROUND_MOVES: 8,
   CASCADE_SPEED_STEP: 1.2,
-  SCORE_SETTLE_MS: 0,
-  SCORE_TRANSFER_MS: 0,
   DRAFT_OPTIONS: 3,                // 2 or 3 — also toggleable in the UI
 
   // Per-move drip spawns — replaces the base game's per-level seeding of
@@ -478,7 +476,7 @@ class Game {
     this.phase = 'menu';          // menu | draft | discard | level | checkpoint | win | loss
     this.opts = { draftOptions: CONFIG.DRAFT_OPTIONS, colours: CONFIG.COLOURS };
     this.fx = []; this.callouts = []; this.fxId = 1; this.tileId = 1;
-    this.busy = false; this.shake = false; this.cascadeSpeed = 1; this.clearPhase = 0; this.scoreStage = null;
+    this.busy = false; this.shake = false; this.cascadeSpeed = 1; this.clearPhase = 0;
     this.pinatas = new Map(); this.triples = new Set(); this.tripleArmed = false;
     this.marks = new Set();
     this.drip = { mark: 0, pinata: 0, chest: 0, triple: 0 }; // dry-move pity counters
@@ -532,7 +530,7 @@ class Game {
     this.discardedKeys = [];
     this.board = null;
     this.score = 0;
-    this.clearPhase = 0; this.cascadeSpeed = 1; this.scoreStage = null;
+    this.clearPhase = 0; this.cascadeSpeed = 1;
     this.busy = false;
     this.computeMods();
     this.startDraft();
@@ -1766,15 +1764,6 @@ class Game {
     }
     this.moveScores.push(this.score - preMoveScore);
     this.movesUsed++;
-
-    if (CONFIG.SCORE_SETTLE_MS) {
-      this.cascadeSpeed = 1;
-      this.scoreStage = 'settle';
-      this.render(); await this.sleep(CONFIG.SCORE_SETTLE_MS);
-      this.scoreStage = 'transfer';
-      this.render(); await this.sleep(CONFIG.SCORE_TRANSFER_MS);
-      this.scoreStage = null;
-    }
 
     if (!this.findAnyMove()) {
       this.callout('No moves — shuffling');

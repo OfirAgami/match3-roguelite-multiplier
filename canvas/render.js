@@ -179,27 +179,35 @@ function createCanvasView(canvas, G) {
       if (impactRun !== G.run || G.score < lastScore) {
         impact = null; lastScore = G.score; lastAward = G.scoreImpact; impactRun = G.run; scorePunch = -Infinity;
       }
-      if (G.scoreImpact && G.scoreImpact !== lastAward) haptic(10);
-      const gained = G.score - lastScore;
-      if (gained > 0) {
-        const continuing = impact && impact.move === G.moveNum && impact.ended === null;
-        const award = G.scoreImpact !== lastAward ? G.scoreImpact : null;
-        impact = { start: now, born: continuing ? impact.born : now, ended: null,
-          from: continuing ? impactValue(now) : 0,
-          move: G.moveNum, amount: gained + (continuing ? impact.amount : 0),
-          multiplier: G.run.multiplier, cascade: award ? award.cascade : continuing ? impact.cascade : 0,
-          cells: award ? award.cells : [] };
-      }
-      lastScore = G.score; lastAward = G.scoreImpact;
-      if (impact && G.scoreStage === 'transfer' && impact.ended === null) {
-        impact.ended = now;
+      // The score settles independently of input; another move carries it forward.
+      if (impact && impact.settled !== null && impact.ended === null && now - impact.settled >= CONFIG.SCORE_SETTLE_MS) {
+        impact.ended = impact.settled + CONFIG.SCORE_SETTLE_MS;
         haptic(12);
       }
       if (impact && impact.ended !== null && now - impact.ended >= CONFIG.SCORE_TRANSFER_MS) {
         scorePunch = impact.ended + CONFIG.SCORE_TRANSFER_MS;
         impact = null;
       }
-      if (impact && impact.move !== G.moveNum) impact = null;
+      if (impact && impact.move !== G.moveNum) {
+        impact.from = impactValue(now);
+        impact.start = now;
+        impact.move = G.moveNum;
+        impact.settled = null;
+        impact.ended = null;
+      }
+      if (G.scoreImpact && G.scoreImpact !== lastAward) haptic(10);
+      const gained = G.score - lastScore;
+      if (gained > 0) {
+        const continuing = impact;
+        const award = G.scoreImpact !== lastAward ? G.scoreImpact : null;
+        impact = { start: now, born: continuing ? impact.born : now, settled: null, ended: null,
+          from: continuing ? impactValue(now) : 0,
+          move: G.moveNum, amount: gained + (continuing ? impact.amount : 0),
+          multiplier: G.run.multiplier, cascade: award ? award.cascade : continuing ? impact.cascade : 0,
+          cells: award ? award.cells : [] };
+      }
+      lastScore = G.score; lastAward = G.scoreImpact;
+      if (impact && !G.busy && impact.settled === null) impact.settled = now;
     }
 
     function drawImpact(now) {
