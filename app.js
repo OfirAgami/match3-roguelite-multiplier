@@ -1697,7 +1697,7 @@ class Game {
     return (dr + dc === 1) || (this.mods.diagSwap && dr === 1 && dc === 1);
   }
 
-  async trySwap(a, b) {
+  async trySwap(a, b, swapPreviewed = false) {
     if (this.phase !== 'level' || this.busy) return;
     if (!this.isSwappable(a, b)) return;
     if (a.r < 0 || a.r >= this.rows || a.c < 0 || a.c >= this.cols) return;
@@ -1706,7 +1706,8 @@ class Game {
     if (this.board[a.r][a.c].chomper || this.board[b.r][b.c].chomper) return; // chomper can't be swapped
     this.busy = true;
     this.swapTiles(a, b);
-    this.render(); await this.sleep(CONFIG.SWAP_MS);
+    this.render();
+    if (!swapPreviewed) await this.sleep(CONFIG.SWAP_MS);
 
     // Merging two adjacent specials is colour-agnostic and always a legal move.
     const ta = this.board[a.r][a.c], tb = this.board[b.r][b.c]; // post-swap tiles
