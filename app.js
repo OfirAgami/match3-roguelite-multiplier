@@ -1145,7 +1145,7 @@ class Game {
   // boardClears: cells removed as a pure board effect (e.g. Floor is lava) —
   // they score and detonate specials, but fire no match hooks and never touch
   // xtra-move marks.
-  processStep(groups, swapCells, seeds, boardClears = []) {
+  processStep(groups, swapCells, seeds, boardClears = [], cascade = 0) {
     const cleared = new Map();     // key -> {r,c,explosion,delay,kind,src}
     const spawns = new Map();      // key -> new special tile
     const floods = [];             // {cells|null, color} pending conversions (null = board-wide)
@@ -1384,12 +1384,15 @@ class Game {
       this.callout(`🎺 Tempo ×${CONFIG.TEMPO_MULT}!`);
     }
     this.score += pts;
+    // Presentation snapshot: removed pieces remain available to the canvas effect.
+    this.scoreImpact = { cascade, cells: [...cleared.values()].map(({ r, c }) =>
+      ({ r, c, color: this.board[r][c].color })) };
     // gold popup = the number includes some bonus (boost / special score /
     // multiplier / tempo); plain clears stay white
     const goldAll = this.run.multiplier > 1 || tempoMult > 1;
     for (const b of buckets.values()) {
       const shown = b.pts * tempoMult;
-      this.addFx(b.sumR / b.n, b.sumC / b.n, `+${shown}`, ((b.bonus || goldAll) ? 'gold' : '') + (shown >= 40 ? ' big' : ''));
+      this.addFx(b.sumR / b.n, b.sumC / b.n, `+${shown}`, 'score ' + ((b.bonus || goldAll) ? 'gold' : '') + (shown >= 40 ? ' big' : ''));
     }
     if (bonusPts) this.addFx(0.2, this.cols / 2 - 0.5, `❄️ +${bonusPts * this.run.multiplier * tempoMult}`, 'gold big');
     // shake from 8 cleared, intensity scales with count (board-only, CSS transform)
@@ -1521,7 +1524,7 @@ class Game {
         this.addFx(-0.7, this.cols / 2 - 0.5, `Combo ×${cascades}${cascades >= 4 ? ' 🔥' : ''}`, 'combo');
         if (cascades >= 3) this.doShake(4);
       }
-      const res = this.processStep(groups, swapCells, []);
+      const res = this.processStep(groups, swapCells, [], [], cascades);
       swapCells = null;
       this.render(); await this.sleep(CONFIG.POP_MS + res.maxDelay);
       this.applyStep(res);
@@ -2127,8 +2130,6 @@ function LevelScreen({ G }) {
   const prev = endless ? next - G.run.endlessDelta : (idx > 0 ? cps[idx - 1] : 0);
   const frac = Math.max(0, Math.min(1, (G.score - prev) / (next - prev)));
   const pct = endless ? frac * 100 : Math.min(100, ((idx + frac) / n) * 100);
-  const cp = G.lastCheckpoint;
-  const reward = G.run.pendingRewards[0];
   return h`<div className=${'screen level-screen' + (endless ? ' part2' : '') + (G.cascadeSpeed > 1 ? ' cascade-fast' : '')}
     style=${{ '--cascade-time-scale': 1 / G.cascadeSpeed }}>
     <div className="hud">
@@ -2156,6 +2157,14 @@ function LevelScreen({ G }) {
     <div className=${'board-wrap' + (G.phase === 'level' && G.movesLeft <= 3 && G.movesLeft >= 1 ? ' danger d' + G.movesLeft : '')}><${Board} G=${G} /></div>
     <${PowerBar} G=${G} />
     <div className="callouts">${G.callouts.map(c => h`<div key=${c.id} className=${'callout ' + (c.cls || '')}>${c.text}</div>`)}</div>
+    <${LevelChoices} G=${G} />
+  </div>`;
+}
+
+function LevelChoices({ G }) {
+  const cp = G.lastCheckpoint;
+  const reward = G.run.pendingRewards[0];
+  return h`<${React.Fragment}>
     ${G.phase === 'checkpoint' && cp ? h`<div className="overlay">
       <div className="panel">
         <h2>${cp.endlessCrossed
@@ -2167,7 +2176,7 @@ function LevelScreen({ G }) {
     </div>` : null}
     ${G.phase === 'discard' ? h`<div className=${'overlay discard-overlay' + (G.discardClosing ? ' closing' : '')}><${InlineDiscard} G=${G} /></div>` : null}
     ${G.phase === 'draft' ? h`<${InlineDraft} G=${G} />` : null}
-  </div>`;
+  <//>`;
 }
 
 function InlineDiscard({ G }) {
@@ -2283,6 +2292,7 @@ function App() {
       if (history.state?.match3Run) history.back();
     };
   }, [playing]);
+  if (window.MultiplierCanvas) return h`<${window.MultiplierCanvas} G=${G} />`;
   if (G.phase === 'menu') return h`<${MenuScreen} G=${G} />`;
   // Run-start draft has no board yet → full screen. Mid-run drafts render
   // inside LevelScreen so the board stays visible (tester feedback).

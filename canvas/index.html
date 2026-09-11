@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Match-3 Roguelite — Multiplier Canvas</title>
+  <link rel="stylesheet" href="../styles.css">
+  <style>
+    @font-face { font-family: Anton; src: url('./Anton-Regular.ttf') format('truetype'); }
+    @font-face { font-family: Bungee; src: url('./Bungee-Regular.ttf') format('truetype'); }
+    html, body { margin: 0; width: 100%; height: 100%; background: #100b19; color: #fff8dd; }
+    body { display: grid; place-items: center; overflow: hidden; }
+    #stage { position: relative; width: min(100vw, 56.28vh); aspect-ratio: 941 / 1672; }
+    @supports (height: 100dvh) { #stage { width: min(100vw, 56.28dvh); } }
+    #background, #root, .canvas-game, #game { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #background { pointer-events: none; }
+    #game { display: block; touch-action: none; outline: none; }
+    #game:focus-visible { outline: 2px solid #a090c7; outline-offset: -2px; }
+    .canvas-controls, .canvas-ui { position: absolute; inset: 0; pointer-events: none; }
+    .canvas-controls button, .canvas-ui button, .canvas-ui input, .canvas-ui textarea { pointer-events: auto; }
+    button { background: #25192f; border-color: #594168; color: #fff8dd; }
+    button:focus-visible { outline: 2px solid #fff8dd; outline-offset: 2px; }
+    button.primary { background: #bba5d6; color: #1b1126; box-shadow: 0 4px 0 #584366; }
+    button:disabled { opacity: .3; cursor: default; }
+    .power-hit { position: absolute; top: 86.6%; width: 13.18%; height: 7.24%; padding: 0; border: 2px solid transparent; border-radius: 5px; background: transparent; }
+    .power-hit.active { border-color: #a090c7; }
+    .power-pages { position: absolute; top: 94.7%; left: 25%; width: 50%; display: flex; align-items: center; justify-content: space-between; color: #a090c7; font-size: 11px; }
+    .power-pages button { padding: 0 14px; font-size: 23px; line-height: 24px; background: transparent; border: 0; }
+    .power-info { position: absolute; bottom: 15.4%; left: 8%; width: 84%; border: 1px solid #594168; border-radius: 8px; padding: 10px; background: #170f23f5; text-align: center; font-size: 12px; }
+    .power-info p { margin-top: 4px; color: #c5b7d7; line-height: 1.4; }
+    .canvas-fast { position: absolute; top: 2%; right: 9%; padding: 4px; }
+    .canvas-ui .screen { min-height: 0; height: 100%; width: 100%; overflow-y: auto; pointer-events: auto; background: #130c1deb; justify-content: center; padding: 20px 16px; gap: 10px; }
+    .canvas-ui h1 { font-family: Bungee, sans-serif; font-size: clamp(18px, 4vw, 25px); }
+    .canvas-ui h2, .draft-inline-title, .discard-heading { font-family: Anton, sans-serif; letter-spacing: .04em; }
+    .canvas-ui .sub, .canvas-ui .hint, .panel p, .card-desc { color: #b4a4c8; }
+    .menu-box { margin-top: 8px; max-width: 100%; }
+    .menu-box input { color: #fff8dd; background: #1d1428; border-color: #594168; }
+    .toggle { color: #c4b5d6; }
+    .toggle b, .discard-multiplier, .draft-inline-title { color: #fff8dd; }
+    .card, .panel, .discard-panel { background: linear-gradient(145deg, #2a1d36, #180f24); border-color: #594168; }
+    .canvas-ui .overlay { position: absolute; pointer-events: auto; background: #0c0812c4; padding: 12px; }
+    .canvas-ui .panel { padding: 20px; }
+    .canvas-ui .discard-panel { max-height: 100%; }
+    .canvas-ui .discard-panel .cards { flex-shrink: 1; }
+    .canvas-ui .draft-inline { position: absolute; bottom: 0; height: 34%; margin: 0; padding: 10px 12px; overflow-y: auto; pointer-events: auto; background: #130c1dee; border-top: 1px solid #463254; }
+    .canvas-ui .draft-inline .cards { flex-direction: row; gap: 6px; }
+    .canvas-ui .draft-inline .card { padding: 10px 8px; }
+    .canvas-ui .draft-inline .card-desc { font-size: 11px; }
+    .canvas-ui .draft-inline .card-tag { top: 8px; right: 8px; padding: 2px; }
+    .canvas-ui .draft-inline .card-tag.legendary { position: static; }
+    .phase-draft.has-board #game { transform: scale(.76); transform-origin: center top; }
+    .phase-draft.has-board .canvas-controls { display: none; }
+    .canvas-ui .end-stats, .end-stats b { color: #fff8dd; }
+    .canvas-ui .seedline { color: #a090c7; }
+    @media (max-height: 650px) {
+      .canvas-ui .screen { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <main id="stage">
+    <canvas id="background" width="941" height="1672" aria-hidden="true"></canvas>
+    <div id="root"></div>
+  </main>
+  <script src="../vendor/react.min.js"></script>
+  <script src="../vendor/react-dom.min.js"></script>
+  <script src="../vendor/htm.min.js"></script>
+  <script src="render.js"></script>
+  <script src="../app.js"></script>
+  <script>
+    // Canvas explosions clear together, so refills need no stagger or chain wait.
+    CONFIG.BOOM_STAGGER_MS = 0;
+    CONFIG.CHAIN_STAGGER_MS = 0;
+    CONFIG.CASCADE_SPEED_STEP = 1.4;
+  </script>
+</body>
+</html>
