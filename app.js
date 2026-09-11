@@ -476,7 +476,7 @@ class Game {
     this.phase = 'menu';          // menu | draft | discard | level | checkpoint | win | loss
     this.opts = { draftOptions: CONFIG.DRAFT_OPTIONS, colours: CONFIG.COLOURS };
     this.fx = []; this.callouts = []; this.fxId = 1; this.tileId = 1;
-    this.busy = false; this.shake = false; this.cascadeSpeed = 1;
+    this.busy = false; this.shake = false; this.cascadeSpeed = 1; this.clearPhase = 0;
     this.pinatas = new Map(); this.triples = new Set(); this.tripleArmed = false;
     this.marks = new Set();
     this.drip = { mark: 0, pinata: 0, chest: 0, triple: 0 }; // dry-move pity counters
@@ -530,6 +530,7 @@ class Game {
     this.discardedKeys = [];
     this.board = null;
     this.score = 0;
+    this.clearPhase = 0; this.cascadeSpeed = 1;
     this.busy = false;
     this.computeMods();
     this.startDraft();
@@ -1142,10 +1143,18 @@ class Game {
   /* --------------------------- Step resolution --------------------------
      One "step" = clear matched groups (+ power-up extras), chain special
      explosions, spawn new specials, score everything, flag tiles to pop.  */
-  // boardClears: cells removed as a pure board effect (e.g. Floor is lava) —
-  // they score and detonate specials, but fire no match hooks and never touch
-  // xtra-move marks.
-  processStep(groups, swapCells, seeds, boardClears = [], cascade = 0) {
+  beginClearPhase(cells) {
+    this.clearPhase++;
+    this.cascadeSpeed = CONFIG.CASCADE_SPEED_STEP ** (this.clearPhase - 1);
+    this.scoreImpact = { cascade: this.clearPhase, cells };
+    if (this.clearPhase >= CONFIG.COMBO_CALLOUT_FROM) {
+      this.addFx(-0.7, this.cols / 2 - 0.5, `Combo ×${this.clearPhase}${this.clearPhase >= 4 ? ' 🔥' : ''}`, 'combo');
+      if (this.clearPhase >= 3) this.doShake(4);
+    }
+  }
+
+  // boardClears score and detonate specials, but fire no match hooks or marks.
+  processStep(groups, swapCells, seeds, boardClears = []) {
     const cleared = new Map();     // key -> {r,c,explosion,delay,kind,src}
     const spawns = new Map();      // key -> new special tile
     const floods = [];             // {cells|null, color} pending conversions (null = board-wide)
@@ -1385,8 +1394,8 @@ class Game {
     }
     this.score += pts;
     // Presentation snapshot: removed pieces remain available to the canvas effect.
-    this.scoreImpact = { cascade, cells: [...cleared.values()].map(({ r, c }) =>
-      ({ r, c, color: this.board[r][c].color })) };
+    if (cnt) this.beginClearPhase([...cleared.values()].map(({ r, c }) =>
+      ({ r, c, color: this.board[r][c].color })));
     // gold popup = the number includes some bonus (boost / special score /
     // multiplier / tempo); plain clears stay white
     const goldAll = this.run.multiplier > 1 || tempoMult > 1;
@@ -1513,25 +1522,17 @@ class Game {
   }
 
   async resolveBoard(swapCells) {
-    let cascades = 0;
-    this.cascadeSpeed = 1;
-    while (cascades++ < CONFIG.MAX_CASCADES) {
+    let steps = 0;
+    while (steps++ < CONFIG.MAX_CASCADES) {
       const groups = this.findGroups();
       if (!groups.length) break;
-      this.cascadeSpeed = cascades > 1 ? CONFIG.CASCADE_SPEED_STEP ** (cascades - 1) : 1;
-      // cascades announce themselves so chains read as a building combo
-      if (cascades >= CONFIG.COMBO_CALLOUT_FROM) {
-        this.addFx(-0.7, this.cols / 2 - 0.5, `Combo ×${cascades}${cascades >= 4 ? ' 🔥' : ''}`, 'combo');
-        if (cascades >= 3) this.doShake(4);
-      }
-      const res = this.processStep(groups, swapCells, [], [], cascades);
+      const res = this.processStep(groups, swapCells, []);
       swapCells = null;
       this.render(); await this.sleep(CONFIG.POP_MS + res.maxDelay);
       this.applyStep(res);
       await this.dropAndFill();
       await this.sleep(CONFIG.STEP_PAUSE);
     }
-    this.cascadeSpeed = 1;
   }
 
   async explodeSeeds(seeds) {
@@ -1624,6 +1625,7 @@ class Game {
         // full per-piece value, same formula as the tile badges
         const pts = (1 + (this.mods.boosts[prey.color] || 0)) * this.run.multiplier;
         this.score += pts;
+        this.beginClearPhase([{ r: nr, c: nc, color: prey.color }]);
         const bonus = (this.mods.boosts[prey.color] || 0) > 0 || this.run.multiplier > 1;
         this.addFx(nr, nc, `+${pts}`, bonus ? 'gold' : '');
       }
@@ -1728,6 +1730,7 @@ class Game {
 
     this.movesLeft--;
     this.moveNum++;
+    this.clearPhase = 0; this.cascadeSpeed = 1;
     if (this.run.picks.some(p => p.id === 'snowball')) this.run.snowball++;
     this.lastSwapDir = { dr: b.r - a.r, dc: b.c - a.c };
     const preMoveScore = this.score;
@@ -1770,6 +1773,7 @@ class Game {
     this.dripRolls(); // per-move spawns (marks/piñatas/triples/chest queue)
     this.checkProgress();
     this.warnLowMoves(); // after bonus moves/chests/lifesaver settle the real count
+    this.cascadeSpeed = 1;
     this.busy = false;
     this.render();
   }

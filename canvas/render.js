@@ -219,17 +219,6 @@ function createCanvasView(canvas, G) {
           }
         }
         ctx.stroke();
-        for (const c of cells) {
-          ctx.save();
-          ctx.translate(l.x + (c.c + .5) * l.cell, l.y + (c.r + .5) * l.cell);
-          ctx.scale(l.cell / 112.7, l.cell / 112.7);
-          const path = shapes[kinds[c.color]];
-          ctx.lineWidth = 7; ctx.lineJoin = 'round';
-          ctx.shadowColor = cream; ctx.shadowBlur = 13;
-          ctx.stroke(path); ctx.shadowBlur = 0;
-          ctx.fillStyle = colors[kinds[c.color]][0]; ctx.fill(path);
-          ctx.restore();
-        }
         const centerR = cells.reduce((sum, c) => sum + c.r, 0) / cells.length;
         const centerC = cells.reduce((sum, c) => sum + c.c, 0) / cells.length;
         const source = cells.reduce((a, b) => (a.r - centerR) ** 2 + (a.c - centerC) ** 2 <
@@ -382,15 +371,20 @@ function createCanvasView(canvas, G) {
         for (const flag of ['pop', 'fresh', 'wiggle', 'cflash', 'chomp']) {
           if (t[flag] && p.flags[flag] === undefined) {
             p.flags[flag] = now;
-            if (flag === 'pop') clearBursts.set(t.id, {
-              x, y, color: colors[kinds[t.color] || 'Y'][0], size: l.cell / 112.7,
-              start: now + popDelay + G.animationMs(35),
-              duration: G.animationMs(t.special ? 480 : 380), special: !!t.special,
-            });
+            if (flag === 'pop') {
+              const at = position(p, now);
+              p.clearPose = { x: at.x + p.nudgeX, y: at.y + p.nudgeY };
+              clearBursts.set(t.id, {
+                x: p.clearPose.x, y: p.clearPose.y,
+                color: colors[kinds[t.color] || 'Y'][0], size: l.cell / 112.7,
+                start: now + popDelay,
+                duration: G.animationMs(t.special ? 480 : 380), special: !!t.special,
+              });
+            }
           }
           if (!t[flag]) delete p.flags[flag];
         }
-        const at = position(p, now);
+        const at = t.pop ? { ...p.clearPose } : position(p, now);
         const held = drag && drag.r === r && drag.c === c;
         const target = drag && !held && drag.target.r === r && drag.target.c === c;
         if (target) p.wasTarget = true;
@@ -401,8 +395,8 @@ function createCanvasView(canvas, G) {
         const offsetY = held ? (drag.target.r - r) * l.cell : target ? (drag.r - r) * l.cell : dy * push;
         p.nudgeX += (offsetX - p.nudgeX) * settle;
         p.nudgeY += (offsetY - p.nudgeY) * settle;
-        p.lift += ((held ? 1 : 0) - p.lift) * settle;
-        at.x += p.nudgeX; at.y += p.nudgeY;
+        if (!t.pop) p.lift += ((held ? 1 : 0) - p.lift) * settle;
+        if (!t.pop) { at.x += p.nudgeX; at.y += p.nudgeY; }
         ctx.save();
         if (!held) { ctx.beginPath(); ctx.rect(34, 605, 873, 834); ctx.clip(); }
         ctx.translate(at.x, at.y); ctx.scale(l.cell / 112.7, l.cell / 112.7);
@@ -413,11 +407,12 @@ function createCanvasView(canvas, G) {
         }
         let flash = 0;
         if (t.pop) {
-          // Every cleared piece gets the full punch before the engine removes it.
+          // Start bursting from the held pose immediately; never land first.
           const progress = Math.max(0, Math.min(1, (now - p.flags.pop - popDelay) / G.animationMs(150)));
-          const scale = progress < .28 ? 1 + progress * 1.6 : 1.45 * (1 - progress) / .72;
+          const started = now >= p.flags.pop + popDelay;
+          const scale = started ? 1.18 * (1 - progress) : 1;
           ctx.globalAlpha = Math.min(1, (1 - progress) / .65);
-          flash = Math.sin(Math.min(1, progress / .55) * Math.PI) * .85;
+          flash = started ? (1 - progress) * .85 : 0;
           ctx.scale(scale, scale);
         } else if (t.fresh) {
           const progress = Math.min(1, (now - p.flags.fresh) / G.animationMs(350));
@@ -443,6 +438,8 @@ function createCanvasView(canvas, G) {
         if (flash > 0 && !t.chest && !t.chomper) {
           ctx.save();
           ctx.globalAlpha *= flash;
+          ctx.strokeStyle = cream; ctx.lineWidth = 5;
+          ctx.stroke(shapes[kind]);
           ctx.fillStyle = cream;
           ctx.fill(shapes[kind]);
           ctx.restore();
