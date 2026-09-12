@@ -97,10 +97,11 @@
 function createCanvasView(canvas, G) {
     const ctx = canvas.getContext('2d');
     const W = 941, H = 1672;
-    const resolution = window.devicePixelRatio;
-    canvas.width = W * resolution;
-    canvas.height = H * resolution;
-    ctx.scale(resolution, resolution);
+    // Match screen pixels, rather than multiplying the full design size by DPR.
+    const resolution = canvas.clientWidth * window.devicePixelRatio / W;
+    canvas.width = Math.round(W * resolution);
+    canvas.height = Math.round(H * resolution);
+    ctx.scale(canvas.width / W, canvas.height / H);
     const cream = '#fff8dd', lavender = '#a090c7';
     const colors = {
       O: ['#f5a04d', '#e17c31', '#815027'],
